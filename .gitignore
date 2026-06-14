@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+data/state.json
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
