@@ -1,16 +1,15 @@
 # 세냥 주식 봇
 
-GPT 기반 디스코드 봇입니다. 슬래시 명령도 지원하지만, 공개 채널 대화에서 `세냥`, `세냥장`, `냥포인트` 같은 키워드나 봇 멘션을 감지하면 자연스럽게 대화에 반응합니다.
+GPT 기반 디스코드 슬래시 명령 봇입니다. 일반 메시지를 읽지 않고 `/세냥` 명령으로 대화하므로 Discord `MESSAGE CONTENT INTENT`가 필요 없습니다.
 
 이 봇의 “주식”, “매수”, “매도”, “지수”, “냥포인트”는 모두 순수 오락용 표현이며 현실 금전, 상품, 투자, 도박과 연결하지 않습니다.
 
 ## 준비
 
 1. Discord Developer Portal에서 애플리케이션과 Bot을 만듭니다.
-2. 자연 대화까지 쓰려면 Bot 설정에서 `MESSAGE CONTENT INTENT`를 켜고 `.env`에 `DISCORD_MESSAGE_CONTENT_INTENT=true`를 넣습니다. 꺼두면 슬래시 명령은 정상 동작합니다.
-3. OAuth2 URL Generator에서 `bot`, `applications.commands` scope를 선택하고 봇을 서버에 초대합니다.
-4. `.env.example`을 참고해 `.env`를 만듭니다.
-5. 의존성을 설치합니다.
+2. OAuth2 URL Generator에서 `bot`, `applications.commands` scope를 선택하고 봇을 서버에 초대합니다.
+3. `.env.example`을 참고해 `.env`를 만듭니다.
+4. 의존성을 설치합니다.
 
 ```bash
 npm install
@@ -51,6 +50,7 @@ npm start
 
 ## 명령어
 
+- `/세냥 메시지:<내용>`: 세냥 봇과 슬래시 명령으로 대화합니다.
 - `/상태`: 현재 세냥 지수와 최근 흐름을 보여줍니다.
 - `/예측 상황:<내용> 현재지수:<선택>`: 상황 설명을 바탕으로 상승/하락/보합을 예측합니다.
 - `/매수`: 상승 예측을 접수합니다.
@@ -69,39 +69,14 @@ npm start
 
 ## 세냥 지수 차트
 
-`/결산`이나 성격차이 가상 차단 이벤트처럼 세냥 지수가 변동되면 Discord 임베드 UI로 최근 지수 차트가 함께 표시됩니다.
+`/결산`처럼 세냥 지수가 변동되면 Discord 임베드 UI에 PNG 라인 차트 이미지가 함께 표시됩니다.
 
 - 최근 지수 흐름은 `data/state.json`의 `indexHistory`에 저장됩니다.
 - `/상태`를 실행해도 최근 차트를 다시 볼 수 있습니다.
-- 차트는 Discord 메시지 안에서 바로 보이도록 스파크라인 형태로 그립니다.
+- 차트 이미지는 봇이 직접 생성해 `senyang-chart.png` 첨부 파일로 표시합니다.
 
-## 자연 대화
+## 슬래시 대화
 
-`Error: Used disallowed intents`가 뜨면 Discord Developer Portal의 Bot 페이지에서 `MESSAGE CONTENT INTENT`가 꺼져 있는데 코드가 그 intent를 요청한 상태입니다. 지금 코드는 기본값이 `false`라서 이 오류를 피합니다.
+`/세냥 메시지:<내용>`을 사용하면 세냥과 대화할 수 있습니다. 대화 맥락은 실행 중 메모리에만 짧게 유지하며, 기본 상태 파일에는 게임 점수와 라운드 정보만 저장합니다.
 
-자연 대화와 랜덤 선톡을 켜려면 둘 다 필요합니다.
-
-```env
-DISCORD_MESSAGE_CONTENT_INTENT=true
-```
-
-그리고 Discord Developer Portal → Bot → Privileged Gateway Intents → `MESSAGE CONTENT INTENT`를 켭니다.
-
-봇은 다음 경우에 공개 채널 메시지를 읽고 답합니다.
-
-- 봇이 멘션됨
-- 메시지에 `세냥`, `세냥장`, `냥포인트` 등 트리거 키워드가 포함됨
-- `.env`의 `BOT_REPLY_CHANNEL_IDS`로 제한한 채널에 해당함
-
-또한 낮은 확률로 봇이 먼저 말을 겁니다. 기본값은 일반 선제 발화 1%, 성격차이 가상 차단 이벤트 0.1%입니다.
-
-```env
-BOT_PROACTIVE_REPLY_CHANCE=0.01
-BOT_PERSONALITY_BLOCK_CHANCE=0.001
-BOT_PROACTIVE_COOLDOWN_MINUTES=10
-BOT_PERSONALITY_BLOCK_COOLDOWN_MINUTES=360
-```
-
-성격차이 차단은 실제 디스코드 차단이 아니라 세냥장 안에서만 발동하는 장난용 빅 이벤트입니다.
-
-대화 맥락은 실행 중 메모리에만 짧게 유지하며, 기본 상태 파일에는 게임 점수와 라운드 정보만 저장합니다.
+`Error: Used disallowed intents`가 뜨면 오래된 배포본이 아직 `MessageContent` intent를 요청하는 상태일 수 있습니다. 최신 코드로 빌드 후 재배포하면 봇은 `Guilds` intent만 사용합니다.

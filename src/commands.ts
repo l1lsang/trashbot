@@ -7,6 +7,16 @@ const resultChoices = [
 ] as const;
 
 export const commandBuilders = [
+  new SlashCommandBuilder()
+    .setName("세냥")
+    .setDescription("세냥 봇과 슬래시 명령으로 대화합니다.")
+    .addStringOption((option) =>
+      option
+        .setName("메시지")
+        .setDescription("세냥에게 보낼 말입니다.")
+        .setRequired(true)
+        .setMaxLength(1500)
+    ),
   new SlashCommandBuilder().setName("상태").setDescription("현재 세냥 지수와 분위기를 보여줍니다."),
   new SlashCommandBuilder()
     .setName("예측")
