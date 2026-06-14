@@ -37,18 +37,25 @@ export const commandBuilders = [
   new SlashCommandBuilder().setName("보합").setDescription("큰 변화 없음 예측을 접수합니다."),
   new SlashCommandBuilder()
     .setName("결산")
-    .setDescription("사용자가 제공한 공식 결과로 예측을 정산합니다.")
+    .setDescription("공식 결과로 정산합니다. 결과를 생략하면 마지막 예측 기준으로 자동결산합니다.")
     .addStringOption((option) =>
-      option.setName("결과").setDescription("공식 결과").setRequired(true).addChoices(...resultChoices)
+      option
+        .setName("결과")
+        .setDescription("공식 결과입니다. 생략하면 마지막 /예측 결과를 사용합니다.")
+        .setRequired(false)
+        .addChoices(...resultChoices)
     )
     .addIntegerOption((option) =>
       option
         .setName("지수변화")
-        .setDescription("예: 7 또는 -5. 생략하면 결과에 따라 기본값을 씁니다.")
+        .setDescription("예: 7 또는 -5. 자동결산에서는 생략하면 마지막 예측 변화값을 씁니다.")
         .setRequired(false)
         .setMinValue(-10000)
         .setMaxValue(10000)
     ),
+  new SlashCommandBuilder()
+    .setName("자동결산")
+    .setDescription("마지막 /예측 결과를 기준으로 자동 정산합니다."),
   new SlashCommandBuilder().setName("랭킹").setDescription("가상 냥포인트 순위를 보여줍니다.")
 ];
 

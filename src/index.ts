@@ -119,15 +119,48 @@ async function handleBetCommand(interaction: ChatInputCommandInteraction, direct
 
 async function handleSettlementCommand(interaction: ChatInputCommandInteraction): Promise<void> {
   const state = await loadState();
-  const result = asDirection(interaction.options.getString("결과", true));
+  const selectedResult = interaction.options.getString("결과");
   const requestedDelta = interaction.options.getInteger("지수변화") ?? undefined;
-  const settlement = settlePredictions(state, result, requestedDelta);
+  const automated = !selectedResult;
+  const result = selectedResult ? asDirection(selectedResult) : state.lastPrediction?.direction;
+
+  if (automated && (!state.lastPrediction || state.lastPrediction.safetyStop)) {
+    throw new Error("자동결산할 마지막 예측이 없습니다. 먼저 /예측을 실행하거나 /결산 결과를 직접 선택해주세요.");
+  }
+
+  if (!result) {
+    throw new Error("정산할 결과를 확인할 수 없습니다. /결산 결과를 직접 선택해주세요.");
+  }
+
+  const settlementDelta = requestedDelta ?? (automated ? state.lastPrediction?.delta : undefined);
+  const settlement = settlePredictions(state, result, settlementDelta);
   const latestIndexEvent = state.indexHistory[0];
   const chart = latestIndexEvent ? createIndexChartPayload(state, latestIndexEvent) : undefined;
 
   await saveState(state);
   await interaction.reply(
-    messagePayload(formatSettlement(settlement), {
+    messagePayload(formatSettlement(settlement, automated), {
+      embeds: chart ? [chart.embed] : [],
+      files: chart?.files ?? []
+    })
+  );
+}
+
+async function handleAutoSettlementCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+  const state = await loadState();
+  const lastPrediction = state.lastPrediction;
+
+  if (!lastPrediction || lastPrediction.safetyStop) {
+    throw new Error("자동결산할 마지막 예측이 없습니다. 먼저 /예측을 실행해주세요.");
+  }
+
+  const settlement = settlePredictions(state, lastPrediction.direction, lastPrediction.delta);
+  const latestIndexEvent = state.indexHistory[0];
+  const chart = latestIndexEvent ? createIndexChartPayload(state, latestIndexEvent) : undefined;
+
+  await saveState(state);
+  await interaction.reply(
+    messagePayload(formatSettlement(settlement, true), {
       embeds: chart ? [chart.embed] : [],
       files: chart?.files ?? []
     })
@@ -166,6 +199,9 @@ async function handleCommand(interaction: ChatInputCommandInteraction): Promise<
         return;
       case "결산":
         await handleSettlementCommand(interaction);
+        return;
+      case "자동결산":
+        await handleAutoSettlementCommand(interaction);
         return;
       case "랭킹": {
         const state = await loadState();

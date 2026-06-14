@@ -149,22 +149,26 @@ export function formatPredictionReceipt(prediction: PredictionEntry): string {
   ].join("\n");
 }
 
-export function formatSettlement(settlement: Settlement): string {
+export function formatSettlement(settlement: Settlement, automated = false): string {
   const winnerText = settlement.winners.length ? settlement.winners.join(", ") : "없음";
   const loserText = settlement.losers.length ? settlement.losers.join(", ") : "없음";
   const deltaText = settlement.delta >= 0 ? `+${settlement.delta}` : String(settlement.delta);
 
   return [
-    "📊 세냥장 마감",
+    automated ? "📊 세냥장 자동 마감" : "📊 세냥장 마감",
     "",
-    `- 공식 결과: ${settlement.result}`,
+    `- ${automated ? "자동 결과" : "공식 결과"}: ${settlement.result}`,
     `- 지수 변화: ${deltaText}`,
     `- 최종 세냥 지수: ${settlement.finalIndex}`,
     `- 적중자: ${winnerText}`,
     `- 미적중자: ${loserText}`,
-    "- 오늘의 총평: 세냥장 마감입니다. 결과 제공 기준으로만 귀엽게 정산했어요.",
+    automated
+      ? "- 오늘의 총평: 마지막 예측 결과를 기준으로 자동 정산했어요."
+      : "- 오늘의 총평: 세냥장 마감입니다. 결과 제공 기준으로만 귀엽게 정산했어요.",
     "",
-    "※ 모든 결과는 오락용입니다."
+    automated
+      ? "※ 자동결산은 마지막 예측을 게임 결과로 사용하는 오락용 기능이며, 실제 감정 판단이 아닙니다."
+      : "※ 모든 결과는 오락용입니다."
   ].join("\n");
 }
 
