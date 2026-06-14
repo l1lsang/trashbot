@@ -26,10 +26,19 @@ function minutesFromEnv(value: string | undefined, fallback: number): number {
   return Math.max(0, integerFromEnv(value, fallback));
 }
 
+function booleanFromEnv(value: string | undefined, fallback: boolean): boolean {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+}
+
 export const config = {
   discordToken: process.env.DISCORD_TOKEN ?? "",
   discordClientId: process.env.DISCORD_CLIENT_ID ?? "",
   discordGuildId: process.env.DISCORD_GUILD_ID ?? "",
+  messageContentIntentEnabled: booleanFromEnv(process.env.DISCORD_MESSAGE_CONTENT_INTENT, false),
   openaiApiKey: process.env.OPENAI_API_KEY ?? "",
   openaiModel: process.env.OPENAI_MODEL ?? "gpt-5.5",
   replyChannelIds: listFromEnv(process.env.BOT_REPLY_CHANNEL_IDS),

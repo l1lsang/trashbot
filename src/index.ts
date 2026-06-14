@@ -86,17 +86,21 @@ function shouldReplyToMessage(message: Message, botUserId: string): boolean {
   }
 
   const cleanContent = message.cleanContent.trim();
-  if (!cleanContent) {
+  const mentionedBot = message.mentions.users.has(botUserId);
+  if (!cleanContent && !mentionedBot) {
     return false;
   }
 
-  const mentionedBot = message.mentions.users.has(botUserId);
   const hasTriggerKeyword = config.triggerKeywords.some((keyword) => cleanContent.includes(keyword));
 
   return mentionedBot || hasTriggerKeyword;
 }
 
 function isPassiveMessageEligible(message: Message): boolean {
+  if (!config.messageContentIntentEnabled) {
+    return false;
+  }
+
   if (message.author.bot) {
     return false;
   }
@@ -317,12 +321,20 @@ async function handleNaturalMessage(message: Message, botUserId: string): Promis
 async function main(): Promise<void> {
   requireDiscordRuntimeConfig();
 
+  const intents = [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages];
+  if (config.messageContentIntentEnabled) {
+    intents.push(GatewayIntentBits.MessageContent);
+  }
+
   const client = new Client({
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
+    intents
   });
 
   client.once(Events.ClientReady, (readyClient) => {
     console.log(`Ready! Logged in as ${readyClient.user.tag}`);
+    if (!config.messageContentIntentEnabled) {
+      console.log("MessageContent intent disabled. Slash commands work; keyword/proactive chat is limited.");
+    }
   });
 
   client.on(Events.InteractionCreate, async (interaction) => {
