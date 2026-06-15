@@ -35,9 +35,16 @@ export interface ServerTagSettings {
   lastScanSummary?: ServerTagScanSummary;
 }
 
+export interface GuildSettings {
+  help: HelpSettings;
+  serverTag: ServerTagSettings;
+  updatedAt: string;
+}
+
 export interface DoumState {
   version: 1;
   help: HelpSettings;
   serverTag: ServerTagSettings;
+  guildSettings: Record<string, GuildSettings>;
   updatedAt: string;
 }

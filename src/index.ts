@@ -1,5 +1,4 @@
 import {
-  type BaseMessageOptions,
   type ChatInputCommandInteraction,
   Client,
   Events,
@@ -9,7 +8,7 @@ import { startAdminServer } from "./admin-ui.js";
 import { generateHelpReply } from "./ai.js";
 import { config, requireDiscordRuntimeConfig } from "./config.js";
 import { ServerTagAutomation } from "./server-tag.js";
-import { loadState } from "./storage.js";
+import { getGuildSettings, loadState } from "./storage.js";
 import type { ChatMemoryItem } from "./types.js";
 
 const helpConversationMemory = new Map<string, ChatMemoryItem[]>();
@@ -33,13 +32,6 @@ function displayNameFromInteraction(interaction: ChatInputCommandInteraction): s
   }
 
   return interaction.user.globalName ?? interaction.user.username;
-}
-
-function messagePayload(content: string, options: Omit<BaseMessageOptions, "content"> = {}): BaseMessageOptions {
-  return {
-    ...options,
-    content: limitDiscordMessage(content)
-  };
 }
 
 function slashChatKey(interaction: ChatInputCommandInteraction): string {
@@ -69,14 +61,15 @@ async function handleHelpCommand(interaction: ChatInputCommandInteraction): Prom
   const author = displayNameFromInteraction(interaction);
   const memory = getSlashChatMemory(interaction);
   const state = await loadState();
+  const settings = getGuildSettings(state, interaction.guildId);
 
   await interaction.deferReply();
-  const reply = await generateHelpReply(message, author, memory, state.help);
+  const reply = await generateHelpReply(message, author, memory, settings.help);
   const content = reply ?? "DOUM이 답변을 만들지 못했습니다. 조금 뒤에 다시 시도해주세요.";
   rememberSlashChat(interaction, author, message);
   rememberDoumReply(interaction, content);
 
-  await interaction.editReply(limitDiscordMessage(content, state.help.maxAnswerLength + 80));
+  await interaction.editReply(limitDiscordMessage(content, settings.help.maxAnswerLength + 80));
 }
 
 async function handleCommand(interaction: ChatInputCommandInteraction): Promise<void> {

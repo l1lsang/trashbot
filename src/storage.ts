@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config.js";
-import type { DoumState, HelpSettings, ServerTagScanSummary, ServerTagSettings } from "./types.js";
+import type { DoumState, GuildSettings, HelpSettings, ServerTagScanSummary, ServerTagSettings } from "./types.js";
 
 function now(): string {
   return new Date().toISOString();
@@ -39,27 +39,54 @@ function booleanValue(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
 }
 
+function createDefaultHelpSettings(): HelpSettings {
+  return {
+    systemPrompt: defaultSystemPrompt,
+    maxAnswerLength: 1200
+  };
+}
+
+function createDefaultServerTagSettings(guildId = "", enabled = false): ServerTagSettings {
+  return {
+    enabled,
+    guildId,
+    targetGuildId: guildId,
+    targetTag: "",
+    roleId: "",
+    roleName: "DOUM 태그 인증",
+    removeWhenMissing: true,
+    scanOnReady: false,
+    scanIntervalMinutes: 10
+  };
+}
+
+export function createDefaultGuildSettings(guildId = "", enabled = false): GuildSettings {
+  return {
+    help: createDefaultHelpSettings(),
+    serverTag: createDefaultServerTagSettings(guildId, enabled),
+    updatedAt: now()
+  };
+}
+
 export function createDefaultState(): DoumState {
   const defaultGuildId = config.discordGuildId;
+  const defaultGuildSettings = createDefaultGuildSettings(defaultGuildId, false);
 
   return {
     version: 1,
-    help: {
-      systemPrompt: defaultSystemPrompt,
-      maxAnswerLength: 1200
-    },
-    serverTag: {
-      enabled: true,
-      guildId: defaultGuildId,
-      targetGuildId: defaultGuildId,
-      targetTag: "",
-      roleId: "",
-      roleName: "DOUM 태그 인증",
-      removeWhenMissing: true,
-      scanOnReady: true,
-      scanIntervalMinutes: 10
-    },
+    help: defaultGuildSettings.help,
+    serverTag: defaultGuildSettings.serverTag,
+    guildSettings: {},
     updatedAt: now()
+  };
+}
+
+function normalizeHelpSettings(value: unknown, fallback: HelpSettings): HelpSettings {
+  const raw = value && typeof value === "object" ? (value as Partial<HelpSettings>) : {};
+
+  return {
+    systemPrompt: stringValue(raw.systemPrompt, fallback.systemPrompt, 4000),
+    maxAnswerLength: clampInteger(raw.maxAnswerLength, fallback.maxAnswerLength, 300, 1900)
   };
 }
 
@@ -84,34 +111,150 @@ function normalizeScanSummary(value: unknown): ServerTagScanSummary | undefined 
   };
 }
 
+function normalizeServerTagSettings(
+  value: unknown,
+  fallback: ServerTagSettings,
+  guildIdFallback = fallback.guildId
+): ServerTagSettings {
+  const raw = value && typeof value === "object" ? (value as Partial<ServerTagSettings>) : {};
+  const guildId = stringValue(raw.guildId, guildIdFallback, 32);
+  const targetGuildId = stringValue(raw.targetGuildId, fallback.targetGuildId || guildId, 32);
+
+  return {
+    enabled: booleanValue(raw.enabled, fallback.enabled),
+    guildId,
+    targetGuildId: targetGuildId || guildId,
+    targetTag: stringValue(raw.targetTag, fallback.targetTag, 4),
+    roleId: stringValue(raw.roleId, fallback.roleId, 32),
+    roleName: stringValue(raw.roleName, fallback.roleName, 80) || fallback.roleName,
+    removeWhenMissing: booleanValue(raw.removeWhenMissing, fallback.removeWhenMissing),
+    scanOnReady: booleanValue(raw.scanOnReady, fallback.scanOnReady),
+    scanIntervalMinutes: clampInteger(raw.scanIntervalMinutes, fallback.scanIntervalMinutes, 1, 1440),
+    lastScanAt: stringValue(raw.lastScanAt, ""),
+    lastScanSummary: normalizeScanSummary(raw.lastScanSummary)
+  };
+}
+
+function normalizeGuildSettings(value: unknown, fallback: GuildSettings, guildId: string): GuildSettings {
+  const raw = value && typeof value === "object" ? (value as Partial<GuildSettings>) : {};
+
+  return {
+    help: normalizeHelpSettings(raw.help, fallback.help),
+    serverTag: normalizeServerTagSettings(raw.serverTag, fallback.serverTag, guildId),
+    updatedAt: stringValue(raw.updatedAt, now())
+  };
+}
+
+function normalizeGuildSettingsMap(value: unknown, fallback: GuildSettings): Record<string, GuildSettings> {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+
+  const normalized: Record<string, GuildSettings> = {};
+  for (const [guildId, rawSettings] of Object.entries(value)) {
+    const id = stringValue(guildId, "", 32);
+    if (!id) {
+      continue;
+    }
+
+    normalized[id] = normalizeGuildSettings(rawSettings, createDefaultGuildSettings(id, false), id);
+  }
+
+  if (Object.keys(normalized).length > 0) {
+    return normalized;
+  }
+
+  return {};
+}
+
 export function normalizeState(value: unknown): DoumState {
   const defaults = createDefaultState();
   const raw = value && typeof value === "object" ? (value as Partial<DoumState>) : {};
-  const rawHelp: Partial<HelpSettings> = raw.help && typeof raw.help === "object" ? raw.help : {};
-  const rawServerTag: Partial<ServerTagSettings> =
-    raw.serverTag && typeof raw.serverTag === "object" ? raw.serverTag : {};
-  const lastScanSummary = normalizeScanSummary(rawServerTag.lastScanSummary);
+  const help = normalizeHelpSettings(raw.help, defaults.help);
+  const serverTag = normalizeServerTagSettings(raw.serverTag, defaults.serverTag, defaults.serverTag.guildId);
+  const legacyFallback: GuildSettings = {
+    help,
+    serverTag,
+    updatedAt: stringValue(raw.updatedAt, now())
+  };
+  const guildSettings = normalizeGuildSettingsMap(raw.guildSettings, legacyFallback);
+
+  if (Object.keys(guildSettings).length === 0 && serverTag.guildId) {
+    guildSettings[serverTag.guildId] = normalizeGuildSettings(legacyFallback, legacyFallback, serverTag.guildId);
+  }
 
   return {
     version: 1,
-    help: {
-      systemPrompt: stringValue(rawHelp.systemPrompt, defaults.help.systemPrompt, 4000),
-      maxAnswerLength: clampInteger(rawHelp.maxAnswerLength, defaults.help.maxAnswerLength, 300, 1900)
-    },
-    serverTag: {
-      enabled: booleanValue(rawServerTag.enabled, defaults.serverTag.enabled),
-      guildId: stringValue(rawServerTag.guildId, defaults.serverTag.guildId, 32),
-      targetGuildId: stringValue(rawServerTag.targetGuildId, defaults.serverTag.targetGuildId, 32),
-      targetTag: stringValue(rawServerTag.targetTag, defaults.serverTag.targetTag, 4),
-      roleId: stringValue(rawServerTag.roleId, defaults.serverTag.roleId, 32),
-      roleName: stringValue(rawServerTag.roleName, defaults.serverTag.roleName, 80) || defaults.serverTag.roleName,
-      removeWhenMissing: booleanValue(rawServerTag.removeWhenMissing, defaults.serverTag.removeWhenMissing),
-      scanOnReady: booleanValue(rawServerTag.scanOnReady, defaults.serverTag.scanOnReady),
-      scanIntervalMinutes: clampInteger(rawServerTag.scanIntervalMinutes, defaults.serverTag.scanIntervalMinutes, 1, 1440),
-      lastScanAt: stringValue(rawServerTag.lastScanAt, ""),
-      lastScanSummary
-    },
+    help,
+    serverTag,
+    guildSettings,
     updatedAt: stringValue(raw.updatedAt, now())
+  };
+}
+
+export function ensureGuildSettings(state: DoumState, guildId: string, guildName?: string): GuildSettings {
+  const id = stringValue(guildId, "", 32);
+  if (!id) {
+    return {
+      help: state.help,
+      serverTag: state.serverTag,
+      updatedAt: state.updatedAt
+    };
+  }
+
+  const existing = state.guildSettings[id];
+  if (existing) {
+    existing.serverTag.guildId = id;
+    if (!existing.serverTag.targetGuildId) {
+      existing.serverTag.targetGuildId = id;
+    }
+    return existing;
+  }
+
+  const created = normalizeGuildSettings(
+    {
+      help: state.help,
+      serverTag: {
+        ...state.serverTag,
+        enabled: false,
+        guildId: id,
+        targetGuildId: id,
+        roleId: "",
+        lastScanAt: "",
+        lastScanSummary: undefined
+      }
+    },
+    createDefaultGuildSettings(id, false),
+    id
+  );
+
+  created.updatedAt = now();
+  state.guildSettings[id] = created;
+  void guildName;
+  return created;
+}
+
+export function getGuildSettings(state: DoumState, guildId: string | null | undefined): GuildSettings {
+  if (!guildId) {
+    return {
+      help: state.help,
+      serverTag: state.serverTag,
+      updatedAt: state.updatedAt
+    };
+  }
+
+  return state.guildSettings[guildId] ?? {
+    help: state.help,
+    serverTag: {
+      ...state.serverTag,
+      enabled: false,
+      guildId,
+      targetGuildId: guildId,
+      roleId: "",
+      lastScanAt: "",
+      lastScanSummary: undefined
+    },
+    updatedAt: state.updatedAt
   };
 }
 

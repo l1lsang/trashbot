@@ -1,15 +1,7 @@
-import {
-  Client,
-  Events,
-  Guild,
-  GuildMember,
-  PermissionFlagsBits,
-  User,
-  type Role
-} from "discord.js";
+import { Client, Events, Guild, GuildMember, PermissionFlagsBits, User, type Role } from "discord.js";
 import { config } from "./config.js";
-import { loadState, saveState } from "./storage.js";
-import type { DoumState, ServerTagScanSummary } from "./types.js";
+import { ensureGuildSettings, getGuildSettings, loadState, saveState } from "./storage.js";
+import type { GuildSettings, ServerTagScanSummary } from "./types.js";
 
 interface MemberSyncResult {
   matched: boolean;
@@ -27,21 +19,17 @@ function normalizeTag(value: string | null | undefined): string {
   return (value ?? "").trim().toLowerCase();
 }
 
-function configuredGuildId(state: DoumState, client: Client): string {
-  return state.serverTag.guildId || config.discordGuildId || client.guilds.cache.first()?.id || "";
+function configuredTargetGuildId(settings: GuildSettings, fallbackGuildId: string): string {
+  return settings.serverTag.targetGuildId || fallbackGuildId;
 }
 
-function configuredTargetGuildId(state: DoumState, fallbackGuildId: string): string {
-  return state.serverTag.targetGuildId || fallbackGuildId;
-}
-
-async function resolveManagedGuild(client: Client, state: DoumState): Promise<Guild> {
-  const guildId = configuredGuildId(state, client);
-  if (!guildId) {
-    throw new Error("관리할 Discord 서버 ID가 없습니다. DISCORD_GUILD_ID 또는 관리 UI의 서버 ID를 설정해주세요.");
+async function resolveGuild(client: Client, guildId: string): Promise<Guild> {
+  const id = guildId || config.discordGuildId || client.guilds.cache.first()?.id || "";
+  if (!id) {
+    throw new Error("스캔할 Discord 서버 ID가 없습니다.");
   }
 
-  return client.guilds.cache.get(guildId) ?? client.guilds.fetch(guildId);
+  return client.guilds.cache.get(id) ?? client.guilds.fetch(id);
 }
 
 async function fetchBotMember(guild: Guild): Promise<GuildMember | null> {
@@ -69,18 +57,18 @@ async function assertCanManageRole(guild: Guild, role: Role): Promise<void> {
   }
 }
 
-async function ensureTagRole(guild: Guild, state: DoumState): Promise<Role> {
-  if (state.serverTag.roleId) {
-    const configuredRole = await guild.roles.fetch(state.serverTag.roleId).catch(() => null);
+async function ensureTagRole(guild: Guild, settings: GuildSettings): Promise<Role> {
+  if (settings.serverTag.roleId) {
+    const configuredRole = await guild.roles.fetch(settings.serverTag.roleId).catch(() => null);
     if (configuredRole) {
       return configuredRole;
     }
   }
 
-  const roleName = state.serverTag.roleName || "DOUM 태그 인증";
+  const roleName = settings.serverTag.roleName || "DOUM 태그 인증";
   const existingRole = guild.roles.cache.find((role) => !role.managed && role.name === roleName);
   if (existingRole) {
-    state.serverTag.roleId = existingRole.id;
+    settings.serverTag.roleId = existingRole.id;
     return existingRole;
   }
 
@@ -93,7 +81,7 @@ async function ensureTagRole(guild: Guild, state: DoumState): Promise<Role> {
     name: roleName,
     reason: "DOUM 서버 태그 자동지급 역할 생성"
   });
-  state.serverTag.roleId = role.id;
+  settings.serverTag.roleId = role.id;
   return role;
 }
 
@@ -101,10 +89,10 @@ async function fetchFreshUser(user: User): Promise<User> {
   return user.fetch(true).catch(() => user);
 }
 
-function userMatchesServerTag(user: User, state: DoumState, fallbackGuildId: string): boolean {
+function userMatchesServerTag(user: User, settings: GuildSettings, fallbackGuildId: string): boolean {
   const primaryGuild = user.primaryGuild;
-  const targetGuildId = configuredTargetGuildId(state, fallbackGuildId);
-  const targetTag = normalizeTag(state.serverTag.targetTag);
+  const targetGuildId = configuredTargetGuildId(settings, fallbackGuildId);
+  const targetTag = normalizeTag(settings.serverTag.targetTag);
   const userTag = normalizeTag(primaryGuild?.tag);
 
   if (!primaryGuild || primaryGuild.identityEnabled !== true || !primaryGuild.identityGuildId || !userTag) {
@@ -120,10 +108,10 @@ function userMatchesServerTag(user: User, state: DoumState, fallbackGuildId: str
 
 export async function syncMemberServerTagRole(
   member: GuildMember,
-  state: DoumState,
+  settings: GuildSettings,
   reason = "DOUM 서버 태그 자동 동기화"
 ): Promise<MemberSyncResult> {
-  if (!state.serverTag.enabled || member.user.bot) {
+  if (!settings.serverTag.enabled || member.user.bot) {
     return {
       matched: false,
       granted: false,
@@ -133,9 +121,9 @@ export async function syncMemberServerTagRole(
     };
   }
 
-  const role = await ensureTagRole(member.guild, state);
+  const role = await ensureTagRole(member.guild, settings);
   const freshUser = await fetchFreshUser(member.user);
-  const matched = userMatchesServerTag(freshUser, state, member.guild.id);
+  const matched = userMatchesServerTag(freshUser, settings, member.guild.id);
   const hasRole = member.roles.cache.has(role.id);
 
   if (matched && !hasRole) {
@@ -144,7 +132,7 @@ export async function syncMemberServerTagRole(
     return { matched, granted: true, removed: false, unchanged: false, skipped: false };
   }
 
-  if (!matched && hasRole && state.serverTag.removeWhenMissing) {
+  if (!matched && hasRole && settings.serverTag.removeWhenMissing) {
     await assertCanManageRole(member.guild, role);
     await member.roles.remove(role, reason);
     return { matched, granted: false, removed: true, unchanged: false, skipped: false };
@@ -168,16 +156,30 @@ function createSummary(guild: Guild, scannedAt = now()): ServerTagScanSummary {
   };
 }
 
-export async function scanConfiguredGuildServerTags(client: Client): Promise<ServerTagScanSummary> {
+export async function scanGuildServerTags(client: Client, guildId: string): Promise<ServerTagScanSummary> {
   const state = await loadState();
-  const guild = await resolveManagedGuild(client, state);
+  const guild = await resolveGuild(client, guildId);
+  const settings = ensureGuildSettings(state, guild.id, guild.name);
   const summary = createSummary(guild);
 
-  if (!state.serverTag.enabled) {
+  if (!settings.serverTag.enabled) {
     summary.skipped = 1;
-    summary.errors.push("서버 태그 자동지급이 꺼져 있습니다.");
-    state.serverTag.lastScanAt = summary.scannedAt;
-    state.serverTag.lastScanSummary = summary;
+    summary.errors.push("이 서버의 태그 자동지급이 꺼져 있습니다.");
+    settings.serverTag.lastScanAt = summary.scannedAt;
+    settings.serverTag.lastScanSummary = summary;
+    settings.updatedAt = summary.scannedAt;
+    await saveState(state);
+    return summary;
+  }
+
+  try {
+    await ensureTagRole(guild, settings);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "지급 역할을 준비하지 못했습니다.";
+    summary.errors.push(message);
+    settings.serverTag.lastScanAt = summary.scannedAt;
+    settings.serverTag.lastScanSummary = summary;
+    settings.updatedAt = summary.scannedAt;
     await saveState(state);
     return summary;
   }
@@ -187,8 +189,9 @@ export async function scanConfiguredGuildServerTags(client: Client): Promise<Ser
   } catch (error) {
     const message = error instanceof Error ? error.message : "멤버 목록을 가져오지 못했습니다.";
     summary.errors.push(message);
-    state.serverTag.lastScanAt = summary.scannedAt;
-    state.serverTag.lastScanSummary = summary;
+    settings.serverTag.lastScanAt = summary.scannedAt;
+    settings.serverTag.lastScanSummary = summary;
+    settings.updatedAt = summary.scannedAt;
     await saveState(state);
     return summary;
   }
@@ -197,7 +200,7 @@ export async function scanConfiguredGuildServerTags(client: Client): Promise<Ser
     summary.checked += 1;
 
     try {
-      const result = await syncMemberServerTagRole(member, state);
+      const result = await syncMemberServerTagRole(member, settings);
 
       if (result.matched) summary.matched += 1;
       if (result.granted) summary.granted += 1;
@@ -211,14 +214,15 @@ export async function scanConfiguredGuildServerTags(client: Client): Promise<Ser
   }
 
   summary.errors = summary.errors.slice(0, 20);
-  state.serverTag.lastScanAt = summary.scannedAt;
-  state.serverTag.lastScanSummary = summary;
+  settings.serverTag.lastScanAt = summary.scannedAt;
+  settings.serverTag.lastScanSummary = summary;
+  settings.updatedAt = summary.scannedAt;
   await saveState(state);
   return summary;
 }
 
 export class ServerTagAutomation {
-  private scanTimer: NodeJS.Timeout | undefined;
+  private readonly scanTimers = new Map<string, NodeJS.Timeout>();
 
   constructor(private readonly client: Client) {}
 
@@ -232,64 +236,78 @@ export class ServerTagAutomation {
     });
 
     this.client.on(Events.UserUpdate, (_oldUser, newUser) => {
-      void this.syncUserInConfiguredGuild(newUser.id, "DOUM 서버 태그 변경 자동 확인");
+      void this.syncUserAcrossGuilds(newUser.id, "DOUM 서버 태그 변경 자동 확인");
     });
   }
 
-  async scanNow(): Promise<ServerTagScanSummary> {
+  async scanNow(guildId: string): Promise<ServerTagScanSummary> {
     if (!this.client.isReady()) {
       throw new Error("Discord 클라이언트가 아직 준비되지 않았습니다.");
     }
 
-    return scanConfiguredGuildServerTags(this.client);
+    return scanGuildServerTags(this.client, guildId);
   }
 
   async syncMember(member: GuildMember, reason?: string): Promise<void> {
     const state = await loadState();
-    await syncMemberServerTagRole(member, state, reason);
+    const settings = ensureGuildSettings(state, member.guild.id, member.guild.name);
+    await syncMemberServerTagRole(member, settings, reason);
     await saveState(state);
   }
 
-  async syncUserInConfiguredGuild(userId: string, reason?: string): Promise<void> {
+  async syncUserAcrossGuilds(userId: string, reason?: string): Promise<void> {
     const state = await loadState();
-    if (!state.serverTag.enabled) {
-      return;
+
+    for (const guild of this.client.guilds.cache.values()) {
+      const settings = getGuildSettings(state, guild.id);
+      if (!settings.serverTag.enabled) {
+        continue;
+      }
+
+      const member = await guild.members.fetch(userId).catch(() => null);
+      if (!member) {
+        continue;
+      }
+
+      await syncMemberServerTagRole(member, settings, reason);
+      state.guildSettings[guild.id] = settings;
     }
 
-    const guild = await resolveManagedGuild(this.client, state);
-    const member = await guild.members.fetch(userId).catch(() => null);
-    if (!member) {
-      return;
-    }
-
-    await syncMemberServerTagRole(member, state, reason);
     await saveState(state);
   }
 
   async rescheduleFromState(): Promise<void> {
-    if (this.scanTimer) {
-      clearInterval(this.scanTimer);
-      this.scanTimer = undefined;
+    for (const timer of this.scanTimers.values()) {
+      clearInterval(timer);
     }
+    this.scanTimers.clear();
 
     const state = await loadState();
-    if (!state.serverTag.enabled || state.serverTag.scanIntervalMinutes <= 0) {
-      return;
-    }
 
-    this.scanTimer = setInterval(() => {
-      void this.scanNow().catch((error) => {
-        console.error("DOUM server tag scheduled scan failed.", error);
-      });
-    }, state.serverTag.scanIntervalMinutes * 60_000);
+    for (const [guildId, settings] of Object.entries(state.guildSettings)) {
+      if (!settings.serverTag.enabled || settings.serverTag.scanIntervalMinutes <= 0) {
+        continue;
+      }
+
+      const timer = setInterval(() => {
+        void this.scanNow(guildId).catch((error) => {
+          console.error(`DOUM server tag scheduled scan failed for ${guildId}.`, error);
+        });
+      }, settings.serverTag.scanIntervalMinutes * 60_000);
+
+      this.scanTimers.set(guildId, timer);
+    }
   }
 
   private async handleReady(): Promise<void> {
     const state = await loadState();
-    if (state.serverTag.enabled && state.serverTag.scanOnReady) {
-      await this.scanNow().catch((error) => {
-        console.error("DOUM server tag startup scan failed.", error);
-      });
+
+    for (const [guildId, settings] of Object.entries(state.guildSettings)) {
+      if (settings.serverTag.enabled && settings.serverTag.scanOnReady) {
+        await this.scanNow(guildId).catch((error) => {
+          console.error(`DOUM server tag startup scan failed for ${guildId}.`, error);
+        });
+      }
     }
 
     await this.rescheduleFromState();

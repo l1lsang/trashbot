@@ -1,8 +1,8 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { Client } from "discord.js";
 import { config } from "./config.js";
-import { loadState, saveState } from "./storage.js";
-import type { DoumState } from "./types.js";
+import { ensureGuildSettings, getGuildSettings, loadState, saveState } from "./storage.js";
+import type { DoumState, GuildSettings } from "./types.js";
 import type { ServerTagAutomation } from "./server-tag.js";
 
 interface AdminServerOptions {
@@ -84,36 +84,43 @@ function booleanSetting(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
 }
 
-function applySettingsPatch(state: DoumState, patch: unknown): DoumState {
+function selectedGuildId(client: Client, requestedGuildId?: string | null): string {
+  const requested = typeof requestedGuildId === "string" ? requestedGuildId.trim() : "";
+  if (requested) {
+    return requested;
+  }
+
+  return config.discordGuildId || client.guilds.cache.first()?.id || "";
+}
+
+function applySettingsPatch(state: DoumState, guildId: string, patch: unknown): GuildSettings {
   const raw = patch && typeof patch === "object" ? (patch as Record<string, unknown>) : {};
   const help = raw.help && typeof raw.help === "object" ? (raw.help as Record<string, unknown>) : {};
   const serverTag = raw.serverTag && typeof raw.serverTag === "object" ? (raw.serverTag as Record<string, unknown>) : {};
+  const settings = ensureGuildSettings(state, guildId);
 
-  return {
-    ...state,
-    help: {
-      systemPrompt: stringSetting(help.systemPrompt, state.help.systemPrompt, 4000),
-      maxAnswerLength: numberSetting(help.maxAnswerLength, state.help.maxAnswerLength, 300, 1900)
-    },
-    serverTag: {
-      ...state.serverTag,
-      enabled: booleanSetting(serverTag.enabled, state.serverTag.enabled),
-      guildId: stringSetting(serverTag.guildId, state.serverTag.guildId, 32),
-      targetGuildId: stringSetting(serverTag.targetGuildId, state.serverTag.targetGuildId, 32),
-      targetTag: stringSetting(serverTag.targetTag, state.serverTag.targetTag, 4),
-      roleId: stringSetting(serverTag.roleId, state.serverTag.roleId, 32),
-      roleName:
-        stringSetting(serverTag.roleName, state.serverTag.roleName, 80) || state.serverTag.roleName || "DOUM 태그 인증",
-      removeWhenMissing: booleanSetting(serverTag.removeWhenMissing, state.serverTag.removeWhenMissing),
-      scanOnReady: booleanSetting(serverTag.scanOnReady, state.serverTag.scanOnReady),
-      scanIntervalMinutes: numberSetting(
-        serverTag.scanIntervalMinutes,
-        state.serverTag.scanIntervalMinutes,
-        1,
-        1440
-      )
-    }
+  settings.help = {
+    systemPrompt: stringSetting(help.systemPrompt, settings.help.systemPrompt, 4000),
+    maxAnswerLength: numberSetting(help.maxAnswerLength, settings.help.maxAnswerLength, 300, 1900)
   };
+  settings.serverTag = {
+    ...settings.serverTag,
+    enabled: booleanSetting(serverTag.enabled, settings.serverTag.enabled),
+    guildId,
+    targetGuildId: stringSetting(serverTag.targetGuildId, settings.serverTag.targetGuildId || guildId, 32) || guildId,
+    targetTag: stringSetting(serverTag.targetTag, settings.serverTag.targetTag, 4),
+    roleId: stringSetting(serverTag.roleId, settings.serverTag.roleId, 32),
+    roleName:
+      stringSetting(serverTag.roleName, settings.serverTag.roleName, 80) ||
+      settings.serverTag.roleName ||
+      "DOUM 태그 인증",
+    removeWhenMissing: booleanSetting(serverTag.removeWhenMissing, settings.serverTag.removeWhenMissing),
+    scanOnReady: booleanSetting(serverTag.scanOnReady, settings.serverTag.scanOnReady),
+    scanIntervalMinutes: numberSetting(serverTag.scanIntervalMinutes, settings.serverTag.scanIntervalMinutes, 1, 1440)
+  };
+  settings.updatedAt = new Date().toISOString();
+  state.guildSettings[guildId] = settings;
+  return settings;
 }
 
 function runtimePayload(client: Client): unknown {
@@ -128,17 +135,30 @@ function runtimePayload(client: Client): unknown {
   };
 }
 
+function statePayload(client: Client, state: DoumState, guildId: string): unknown {
+  const settings = getGuildSettings(state, guildId);
+
+  return {
+    state,
+    selectedGuildId: guildId,
+    settings,
+    runtime: runtimePayload(client)
+  };
+}
+
 async function handleApi(
   request: IncomingMessage,
   response: ServerResponse,
   pathname: string,
   client: Client,
-  automation: ServerTagAutomation
+  automation: ServerTagAutomation,
+  searchParams: URLSearchParams
 ): Promise<void> {
   if (pathname === "/api/meta" && request.method === "GET") {
     sendJson(response, 200, {
       authConfigured: Boolean(config.adminUiToken),
-      runtime: runtimePayload(client)
+      runtime: runtimePayload(client),
+      defaultGuildId: selectedGuildId(client)
     });
     return;
   }
@@ -153,31 +173,32 @@ async function handleApi(
   }
 
   if (pathname === "/api/state" && request.method === "GET") {
-    sendJson(response, 200, {
-      state: await loadState(),
-      runtime: runtimePayload(client)
-    });
+    const state = await loadState();
+    const guildId = selectedGuildId(client, searchParams.get("guildId"));
+    sendJson(response, 200, statePayload(client, state, guildId));
     return;
   }
 
   if (pathname === "/api/settings" && request.method === "POST") {
-    const patch = await readJsonBody(request);
-    const nextState = applySettingsPatch(await loadState(), patch);
-    await saveState(nextState);
+    const body = await readJsonBody(request);
+    const raw = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const guildId = selectedGuildId(client, stringSetting(raw.guildId, "", 32));
+    const state = await loadState();
+    applySettingsPatch(state, guildId, raw);
+    await saveState(state);
     await automation.rescheduleFromState();
-    sendJson(response, 200, {
-      state: await loadState(),
-      runtime: runtimePayload(client)
-    });
+    sendJson(response, 200, statePayload(client, await loadState(), guildId));
     return;
   }
 
   if (pathname === "/api/server-tag/scan" && request.method === "POST") {
-    const summary = await automation.scanNow();
+    const body = await readJsonBody(request);
+    const raw = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const guildId = selectedGuildId(client, stringSetting(raw.guildId, "", 32));
+    const summary = await automation.scanNow(guildId);
     sendJson(response, 200, {
       summary,
-      state: await loadState(),
-      runtime: runtimePayload(client)
+      ...statePayload(client, await loadState(), guildId)
     });
     return;
   }
@@ -254,6 +275,7 @@ function adminHtml(): string {
     }
 
     input,
+    select,
     textarea {
       width: 100%;
       border: 1px solid #c8d0dc;
@@ -272,6 +294,7 @@ function adminHtml(): string {
     }
 
     input:focus,
+    select:focus,
     textarea:focus {
       border-color: #2563eb;
       box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
@@ -428,6 +451,20 @@ function adminHtml(): string {
     </header>
 
     <section>
+      <h2>서버 선택</h2>
+      <div class="grid">
+        <label>
+          설정할 서버
+          <select id="guildSelect"></select>
+        </label>
+        <label>
+          선택된 서버 ID
+          <input id="selectedGuildId" readonly>
+        </label>
+      </div>
+    </section>
+
+    <section>
       <h2>런타임</h2>
       <div class="runtime" id="runtime"></div>
     </section>
@@ -457,12 +494,8 @@ function adminHtml(): string {
           <input id="scanIntervalMinutes" type="number" min="1" max="1440" step="1">
         </label>
         <label>
-          관리 서버 ID
-          <input id="guildId" inputmode="numeric" placeholder="Discord Guild ID">
-        </label>
-        <label>
           태그 기준 서버 ID
-          <input id="targetGuildId" inputmode="numeric" placeholder="비우면 관리 서버 기준">
+          <input id="targetGuildId" inputmode="numeric" placeholder="비우면 선택 서버 기준">
         </label>
         <label>
           태그 문자열
@@ -481,8 +514,8 @@ function adminHtml(): string {
 
     <section>
       <div class="toolbar">
-        <button id="save">저장</button>
-        <button class="secondary" id="scan">지금 스캔</button>
+        <button id="save">이 서버 설정 저장</button>
+        <button class="secondary" id="scan">이 서버 지금 스캔</button>
       </div>
       <div class="summary" id="summary" style="margin-top:14px"></div>
       <pre class="hidden" id="errors"></pre>
@@ -491,19 +524,8 @@ function adminHtml(): string {
 
   <script>
     const tokenKey = "doum_admin_token";
-    const fields = [
-      "maxAnswerLength",
-      "systemPrompt",
-      "tagEnabled",
-      "removeWhenMissing",
-      "scanOnReady",
-      "scanIntervalMinutes",
-      "guildId",
-      "targetGuildId",
-      "targetTag",
-      "roleId",
-      "roleName"
-    ];
+    const guildKey = "doum_admin_guild_id";
+    let runtimeGuilds = [];
 
     function el(id) {
       return document.getElementById(id);
@@ -513,6 +535,7 @@ function adminHtml(): string {
       el("save").disabled = isBusy;
       el("scan").disabled = isBusy;
       el("unlock").disabled = isBusy;
+      el("guildSelect").disabled = isBusy;
     }
 
     function setStatus(text) {
@@ -521,6 +544,10 @@ function adminHtml(): string {
 
     function token() {
       return el("token").value.trim();
+    }
+
+    function selectedGuildId() {
+      return el("guildSelect").value || el("selectedGuildId").value.trim();
     }
 
     async function api(path, options) {
@@ -550,13 +577,40 @@ function adminHtml(): string {
       return item;
     }
 
-    function renderRuntime(runtime) {
+    function renderGuildSelect(runtime, selectedId) {
+      runtimeGuilds = runtime && runtime.guilds ? runtime.guilds : [];
+      const select = el("guildSelect");
+      const existing = selectedId || localStorage.getItem(guildKey) || (runtimeGuilds[0] && runtimeGuilds[0].id) || "";
+      select.replaceChildren();
+
+      if (!runtimeGuilds.length && existing) {
+        const option = document.createElement("option");
+        option.value = existing;
+        option.textContent = existing;
+        select.append(option);
+      }
+
+      runtimeGuilds.forEach((guild) => {
+        const option = document.createElement("option");
+        option.value = guild.id;
+        option.textContent = guild.name + " (" + guild.id + ")";
+        select.append(option);
+      });
+
+      if (existing) {
+        select.value = existing;
+      }
+      el("selectedGuildId").value = select.value || existing;
+    }
+
+    function renderRuntime(runtime, selectedId) {
+      const guild = runtime && runtime.guilds ? runtime.guilds.find((item) => item.id === selectedId) : null;
       const target = el("runtime");
       target.replaceChildren(
         metric("봇 상태", runtime && runtime.botReady ? "Ready" : "Not ready"),
         metric("봇 계정", runtime && runtime.botUser ? runtime.botUser : "-"),
         metric("서버 수", runtime && runtime.guilds ? String(runtime.guilds.length) : "0"),
-        metric("관리 포트", location.host)
+        metric("선택 서버", guild ? guild.name : selectedId || "-")
       );
     }
 
@@ -588,23 +642,24 @@ function adminHtml(): string {
       }
     }
 
-    function fillForm(state) {
-      el("maxAnswerLength").value = state.help.maxAnswerLength;
-      el("systemPrompt").value = state.help.systemPrompt;
-      el("tagEnabled").checked = state.serverTag.enabled;
-      el("removeWhenMissing").checked = state.serverTag.removeWhenMissing;
-      el("scanOnReady").checked = state.serverTag.scanOnReady;
-      el("scanIntervalMinutes").value = state.serverTag.scanIntervalMinutes;
-      el("guildId").value = state.serverTag.guildId || "";
-      el("targetGuildId").value = state.serverTag.targetGuildId || "";
-      el("targetTag").value = state.serverTag.targetTag || "";
-      el("roleId").value = state.serverTag.roleId || "";
-      el("roleName").value = state.serverTag.roleName || "";
-      renderSummary(state.serverTag.lastScanSummary);
+    function fillForm(settings, selectedId) {
+      el("selectedGuildId").value = selectedId || "";
+      el("maxAnswerLength").value = settings.help.maxAnswerLength;
+      el("systemPrompt").value = settings.help.systemPrompt;
+      el("tagEnabled").checked = settings.serverTag.enabled;
+      el("removeWhenMissing").checked = settings.serverTag.removeWhenMissing;
+      el("scanOnReady").checked = settings.serverTag.scanOnReady;
+      el("scanIntervalMinutes").value = settings.serverTag.scanIntervalMinutes;
+      el("targetGuildId").value = settings.serverTag.targetGuildId || selectedId || "";
+      el("targetTag").value = settings.serverTag.targetTag || "";
+      el("roleId").value = settings.serverTag.roleId || "";
+      el("roleName").value = settings.serverTag.roleName || "";
+      renderSummary(settings.serverTag.lastScanSummary);
     }
 
     function collectSettings() {
       return {
+        guildId: selectedGuildId(),
         help: {
           maxAnswerLength: Number(el("maxAnswerLength").value),
           systemPrompt: el("systemPrompt").value
@@ -614,7 +669,6 @@ function adminHtml(): string {
           removeWhenMissing: el("removeWhenMissing").checked,
           scanOnReady: el("scanOnReady").checked,
           scanIntervalMinutes: Number(el("scanIntervalMinutes").value),
-          guildId: el("guildId").value,
           targetGuildId: el("targetGuildId").value,
           targetTag: el("targetTag").value,
           roleId: el("roleId").value,
@@ -626,7 +680,9 @@ function adminHtml(): string {
     async function loadMeta() {
       const response = await fetch("/api/meta");
       const payload = await response.json();
-      renderRuntime(payload.runtime);
+      const selectedId = localStorage.getItem(guildKey) || payload.defaultGuildId || "";
+      renderGuildSelect(payload.runtime, selectedId);
+      renderRuntime(payload.runtime, selectedId);
       if (!payload.authConfigured) {
         setStatus("ADMIN_UI_TOKEN 설정 필요");
       }
@@ -635,9 +691,12 @@ function adminHtml(): string {
     async function loadState() {
       setBusy(true);
       try {
-        const payload = await api("/api/state", { method: "GET" });
-        renderRuntime(payload.runtime);
-        fillForm(payload.state);
+        const guildId = selectedGuildId();
+        const payload = await api("/api/state?guildId=" + encodeURIComponent(guildId), { method: "GET" });
+        renderGuildSelect(payload.runtime, payload.selectedGuildId);
+        renderRuntime(payload.runtime, payload.selectedGuildId);
+        fillForm(payload.settings, payload.selectedGuildId);
+        localStorage.setItem(guildKey, payload.selectedGuildId);
         setStatus("연결됨");
       } catch (error) {
         setStatus(error.message);
@@ -653,8 +712,10 @@ function adminHtml(): string {
           method: "POST",
           body: JSON.stringify(collectSettings())
         });
-        renderRuntime(payload.runtime);
-        fillForm(payload.state);
+        renderGuildSelect(payload.runtime, payload.selectedGuildId);
+        renderRuntime(payload.runtime, payload.selectedGuildId);
+        fillForm(payload.settings, payload.selectedGuildId);
+        localStorage.setItem(guildKey, payload.selectedGuildId);
         setStatus("저장됨");
       } catch (error) {
         setStatus(error.message);
@@ -666,10 +727,15 @@ function adminHtml(): string {
     async function scanNow() {
       setBusy(true);
       try {
-        const payload = await api("/api/server-tag/scan", { method: "POST" });
-        renderRuntime(payload.runtime);
-        fillForm(payload.state);
+        const payload = await api("/api/server-tag/scan", {
+          method: "POST",
+          body: JSON.stringify({ guildId: selectedGuildId() })
+        });
+        renderGuildSelect(payload.runtime, payload.selectedGuildId);
+        renderRuntime(payload.runtime, payload.selectedGuildId);
+        fillForm(payload.settings, payload.selectedGuildId);
         renderSummary(payload.summary);
+        localStorage.setItem(guildKey, payload.selectedGuildId);
         setStatus("스캔 완료");
       } catch (error) {
         setStatus(error.message);
@@ -683,13 +749,13 @@ function adminHtml(): string {
       localStorage.setItem(tokenKey, token());
       loadState();
     });
+    el("guildSelect").addEventListener("change", () => {
+      el("selectedGuildId").value = selectedGuildId();
+      localStorage.setItem(guildKey, selectedGuildId());
+      if (token()) loadState();
+    });
     el("save").addEventListener("click", saveSettings);
     el("scan").addEventListener("click", scanNow);
-
-    fields.forEach((id) => {
-      const field = el(id);
-      if (field) field.disabled = false;
-    });
 
     loadMeta().then(() => {
       if (token()) loadState();
@@ -715,7 +781,7 @@ export function startAdminServer(options: AdminServerOptions): Server | undefine
       }
 
       if (url.pathname.startsWith("/api/")) {
-        await handleApi(request, response, url.pathname, options.client, options.automation);
+        await handleApi(request, response, url.pathname, options.client, options.automation, url.searchParams);
         return;
       }
 
