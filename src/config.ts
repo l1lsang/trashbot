@@ -1,4 +1,4 @@
-import "dotenv/config";
+﻿import "dotenv/config";
 import path from "node:path";
 
 function integerFromEnv(value: string | undefined, fallback: number): number {
@@ -14,6 +14,16 @@ function booleanFromEnv(value: string | undefined, fallback: boolean): boolean {
   return !["0", "false", "no", "off"].includes(value.trim().toLowerCase());
 }
 
+function adminUiHostFromEnv(): string {
+  const requestedHost = process.env.ADMIN_UI_HOST?.trim();
+  const renderPort = process.env.PORT?.trim();
+
+  if (renderPort && (!requestedHost || requestedHost === "127.0.0.1" || requestedHost === "localhost")) {
+    return "0.0.0.0";
+  }
+
+  return requestedHost || "127.0.0.1";
+}
 export const config = {
   discordToken: process.env.DISCORD_TOKEN ?? "",
   discordClientId: process.env.DISCORD_CLIENT_ID ?? "",
@@ -22,8 +32,8 @@ export const config = {
   openaiModel: process.env.OPENAI_MODEL ?? "gpt-5.5",
   dataFile: path.join(process.cwd(), "data", "doum-state.json"),
   adminUiEnabled: booleanFromEnv(process.env.ADMIN_UI_ENABLED, true),
-  adminUiHost: process.env.ADMIN_UI_HOST ?? "127.0.0.1",
-  adminUiPort: integerFromEnv(process.env.ADMIN_UI_PORT, 8787),
+  adminUiHost: adminUiHostFromEnv(),
+  adminUiPort: integerFromEnv(process.env.PORT ?? process.env.ADMIN_UI_PORT, 8787),
   adminUiToken: process.env.ADMIN_UI_TOKEN ?? ""
 };
 
@@ -37,3 +47,5 @@ export function requireDiscordRuntimeConfig(): void {
     throw new Error(`Missing required env: ${missing.map(([name]) => name).join(", ")}`);
   }
 }
+
+

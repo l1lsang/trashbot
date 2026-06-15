@@ -1,0 +1,84 @@
+{
+  "version": 1,
+  "help": {
+    "systemPrompt": "당신은 \"DOUM\"이라는 디스코드 도움 봇입니다.\n\n역할:\n- 사용자의 질문을 한국어로 명확하고 실용적으로 답합니다.\n- 서버 운영, 디스코드 사용법, 일반 지식, 간단한 코드/문서 작업을 도와줍니다.\n- 모르면 추측을 사실처럼 말하지 말고 확인이 필요하다고 말합니다.\n- 위험하거나 불법적인 요청, 개인정보 침해, 괴롭힘, 자해 조장, 악성코드 제작은 거절합니다.\n- 답변은 친절하지만 장황하지 않게 작성합니다.",
+    "maxAnswerLength": 1200
+  },
+  "serverTag": {
+    "enabled": false,
+    "guildId": "",
+    "targetGuildId": "",
+    "targetTag": "",
+    "roleId": "",
+    "roleName": "DOUM 태그 인증",
+    "removeWhenMissing": true,
+    "scanOnReady": false,
+    "scanIntervalMinutes": 10,
+    "lastScanAt": ""
+  },
+  "guildSettings": {
+    "1409152239947219067": {
+      "help": {
+        "systemPrompt": "당신은 \"DOUM\"이라는 디스코드 도움 봇입니다.\n\n역할:\n- 사용자의 질문을 한국어로 명확하고 실용적으로 답합니다.\n- 서버 운영, 디스코드 사용법, 일반 지식, 간단한 코드/문서 작업을 도와줍니다.\n- 모르면 추측을 사실처럼 말하지 말고 확인이 필요하다고 말합니다.\n- 위험하거나 불법적인 요청, 개인정보 침해, 괴롭힘, 자해 조장, 악성코드 제작은 거절합니다.\n- 답변은 친절하지만 장황하지 않게 작성합니다.",
+        "maxAnswerLength": 1200
+      },
+      "serverTag": {
+        "enabled": true,
+        "guildId": "1409152239947219067",
+        "targetGuildId": "1409152239947219067",
+        "targetTag": "",
+        "roleId": "1492505640596148254",
+        "roleName": "안식",
+        "removeWhenMissing": true,
+        "scanOnReady": true,
+        "scanIntervalMinutes": 1,
+        "lastScanAt": "2026-06-15T04:50:38.213Z",
+        "lastScanSummary": {
+          "guildId": "1409152239947219067",
+          "guildName": "침대 속 안식처",
+          "checked": 308,
+          "matched": 17,
+          "granted": 0,
+          "removed": 0,
+          "unchanged": 289,
+          "skipped": 19,
+          "errors": [],
+          "scannedAt": "2026-06-15T04:50:38.213Z"
+        }
+      },
+      "updatedAt": "2026-06-15T05:19:14.628Z"
+    },
+    "1485486452715294742": {
+      "help": {
+        "systemPrompt": "당신은 \"DOUM\"이라는 디스코드 도움 봇입니다.\n\n역할:\n- 사용자의 질문을 한국어로 명확하고 실용적으로 답합니다.\n- 서버 운영, 디스코드 사용법, 일반 지식, 간단한 코드/문서 작업을 도와줍니다.\n- 모르면 추측을 사실처럼 말하지 말고 확인이 필요하다고 말합니다.\n- 위험하거나 불법적인 요청, 개인정보 침해, 괴롭힘, 자해 조장, 악성코드 제작은 거절합니다.\n- 답변은 친절하지만 장황하지 않게 작성합니다.",
+        "maxAnswerLength": 1200
+      },
+      "serverTag": {
+        "enabled": true,
+        "guildId": "1485486452715294742",
+        "targetGuildId": "1485486452715294742",
+        "targetTag": "",
+        "roleId": "1515943200794214460",
+        "roleName": "바보",
+        "removeWhenMissing": true,
+        "scanOnReady": true,
+        "scanIntervalMinutes": 1,
+        "lastScanAt": "2026-06-15T05:25:14.701Z",
+        "lastScanSummary": {
+          "guildId": "1485486452715294742",
+          "guildName": "히나님의 서버",
+          "checked": 37,
+          "matched": 2,
+          "granted": 0,
+          "removed": 0,
+          "unchanged": 27,
+          "skipped": 10,
+          "errors": [],
+          "scannedAt": "2026-06-15T05:25:14.701Z"
+        }
+      },
+      "updatedAt": "2026-06-15T05:25:14.701Z"
+    }
+  },
+  "updatedAt": "2026-06-15T05:31:13.492Z"
+}
