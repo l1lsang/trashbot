@@ -6,15 +6,25 @@ function integerFromEnv(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function booleanFromEnv(value: string | undefined, fallback: boolean): boolean {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  return !["0", "false", "no", "off"].includes(value.trim().toLowerCase());
+}
+
 export const config = {
   discordToken: process.env.DISCORD_TOKEN ?? "",
   discordClientId: process.env.DISCORD_CLIENT_ID ?? "",
   discordGuildId: process.env.DISCORD_GUILD_ID ?? "",
   openaiApiKey: process.env.OPENAI_API_KEY ?? "",
   openaiModel: process.env.OPENAI_MODEL ?? "gpt-5.5",
-  startingPoints: integerFromEnv(process.env.STARTING_POINTS, 100),
-  betStake: integerFromEnv(process.env.BET_STAKE, 10),
-  dataFile: path.join(process.cwd(), "data", "state.json")
+  dataFile: path.join(process.cwd(), "data", "doum-state.json"),
+  adminUiEnabled: booleanFromEnv(process.env.ADMIN_UI_ENABLED, true),
+  adminUiHost: process.env.ADMIN_UI_HOST ?? "127.0.0.1",
+  adminUiPort: integerFromEnv(process.env.ADMIN_UI_PORT, 8787),
+  adminUiToken: process.env.ADMIN_UI_TOKEN ?? ""
 };
 
 export function requireDiscordRuntimeConfig(): void {

@@ -5,29 +5,21 @@ import {
   Events,
   GatewayIntentBits
 } from "discord.js";
-import { analyzeScenario, generateConversationReply, type ChatMemoryItem } from "./ai.js";
-import { createIndexChartPayload } from "./chart.js";
+import { startAdminServer } from "./admin-ui.js";
+import { generateHelpReply } from "./ai.js";
 import { config, requireDiscordRuntimeConfig } from "./config.js";
-import {
-  formatPredictionReceipt,
-  formatRanking,
-  formatSettlement,
-  formatStatus,
-  placePrediction,
-  settlePredictions
-} from "./game.js";
-import { formatPrediction } from "./senyang.js";
-import { loadState, saveState } from "./storage.js";
-import type { Direction } from "./types.js";
+import { ServerTagAutomation } from "./server-tag.js";
+import { loadState } from "./storage.js";
+import type { ChatMemoryItem } from "./types.js";
 
-const slashConversationMemory = new Map<string, ChatMemoryItem[]>();
+const helpConversationMemory = new Map<string, ChatMemoryItem[]>();
 
-function limitDiscordMessage(text: string): string {
-  if (text.length <= 1900) {
+function limitDiscordMessage(text: string, maxLength = 1900): string {
+  if (text.length <= maxLength) {
     return text;
   }
 
-  return `${text.slice(0, 1880)}\n...`;
+  return `${text.slice(0, Math.max(0, maxLength - 20))}\n...`;
 }
 
 function displayNameFromInteraction(interaction: ChatInputCommandInteraction): string {
@@ -43,14 +35,6 @@ function displayNameFromInteraction(interaction: ChatInputCommandInteraction): s
   return interaction.user.globalName ?? interaction.user.username;
 }
 
-function asDirection(value: string): Direction {
-  if (value === "상승" || value === "하락" || value === "보합") {
-    return value;
-  }
-
-  throw new Error(`알 수 없는 방향입니다: ${value}`);
-}
-
 function messagePayload(content: string, options: Omit<BaseMessageOptions, "content"> = {}): BaseMessageOptions {
   return {
     ...options,
@@ -58,162 +42,55 @@ function messagePayload(content: string, options: Omit<BaseMessageOptions, "cont
   };
 }
 
-async function handlePredictionCommand(interaction: ChatInputCommandInteraction): Promise<void> {
-  const state = await loadState();
-  const scenario = interaction.options.getString("상황", true);
-  const currentIndex = interaction.options.getInteger("현재지수") ?? state.index;
-
-  await interaction.deferReply();
-  const result = await analyzeScenario(scenario, currentIndex);
-  state.lastPrediction = result;
-  state.recentFlow = result.safetyStop
-    ? "최근 예측은 안전 중단으로 처리되었습니다."
-    : `최근 예측은 ${result.direction}, 예상 변화 ${result.delta >= 0 ? "+" : ""}${result.delta}입니다.`;
-
-  await saveState(state);
-  await interaction.editReply(limitDiscordMessage(formatPrediction(result)));
-}
-
 function slashChatKey(interaction: ChatInputCommandInteraction): string {
   return `${interaction.guildId ?? "dm"}:${interaction.channelId}:${interaction.user.id}`;
 }
 
 function getSlashChatMemory(interaction: ChatInputCommandInteraction): ChatMemoryItem[] {
-  return slashConversationMemory.get(slashChatKey(interaction)) ?? [];
+  return helpConversationMemory.get(slashChatKey(interaction)) ?? [];
 }
 
 function rememberSlashChat(interaction: ChatInputCommandInteraction, author: string, message: string): void {
   const key = slashChatKey(interaction);
-  const memory = slashConversationMemory.get(key) ?? [];
+  const memory = helpConversationMemory.get(key) ?? [];
   memory.push({ author, content: message });
-  slashConversationMemory.set(key, memory.slice(-12));
+  helpConversationMemory.set(key, memory.slice(-12));
 }
 
-function rememberSenyangReply(interaction: ChatInputCommandInteraction, reply: string): void {
+function rememberDoumReply(interaction: ChatInputCommandInteraction, reply: string): void {
   const key = slashChatKey(interaction);
-  const memory = slashConversationMemory.get(key) ?? [];
-  memory.push({ author: "세냥", content: reply });
-  slashConversationMemory.set(key, memory.slice(-12));
+  const memory = helpConversationMemory.get(key) ?? [];
+  memory.push({ author: "DOUM", content: reply });
+  helpConversationMemory.set(key, memory.slice(-12));
 }
 
-async function handleSenyangCommand(interaction: ChatInputCommandInteraction): Promise<void> {
-  const message = interaction.options.getString("메시지", true);
+async function handleHelpCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+  const message = interaction.options.getString("질문", true);
   const author = displayNameFromInteraction(interaction);
   const memory = getSlashChatMemory(interaction);
+  const state = await loadState();
 
   await interaction.deferReply();
-  const reply = await generateConversationReply(message, author, memory);
-  const content = reply ?? "세냥장 중계석이 잠깐 조용해졌어요. 다시 한 번 말 걸어주세요냥.";
+  const reply = await generateHelpReply(message, author, memory, state.help);
+  const content = reply ?? "DOUM이 답변을 만들지 못했습니다. 조금 뒤에 다시 시도해주세요.";
   rememberSlashChat(interaction, author, message);
-  rememberSenyangReply(interaction, content);
+  rememberDoumReply(interaction, content);
 
-  await interaction.editReply(limitDiscordMessage(content));
-}
-
-async function handleBetCommand(interaction: ChatInputCommandInteraction, direction: Direction): Promise<void> {
-  const state = await loadState();
-  const prediction = placePrediction(state, interaction.user.id, displayNameFromInteraction(interaction), direction);
-  await saveState(state);
-  await interaction.reply(limitDiscordMessage(formatPredictionReceipt(prediction)));
-}
-
-async function handleSettlementCommand(interaction: ChatInputCommandInteraction): Promise<void> {
-  const state = await loadState();
-  const selectedResult = interaction.options.getString("결과");
-  const requestedDelta = interaction.options.getInteger("지수변화") ?? undefined;
-  const automated = !selectedResult;
-  const result = selectedResult ? asDirection(selectedResult) : state.lastPrediction?.direction;
-
-  if (automated && (!state.lastPrediction || state.lastPrediction.safetyStop)) {
-    throw new Error("자동결산할 마지막 예측이 없습니다. 먼저 /예측을 실행하거나 /결산 결과를 직접 선택해주세요.");
-  }
-
-  if (!result) {
-    throw new Error("정산할 결과를 확인할 수 없습니다. /결산 결과를 직접 선택해주세요.");
-  }
-
-  const settlementDelta = requestedDelta ?? (automated ? state.lastPrediction?.delta : undefined);
-  const settlement = settlePredictions(state, result, settlementDelta);
-  const latestIndexEvent = state.indexHistory[0];
-  const chart = latestIndexEvent ? createIndexChartPayload(state, latestIndexEvent) : undefined;
-
-  await saveState(state);
-  await interaction.reply(
-    messagePayload(formatSettlement(settlement, automated), {
-      embeds: chart ? [chart.embed] : [],
-      files: chart?.files ?? []
-    })
-  );
-}
-
-async function handleAutoSettlementCommand(interaction: ChatInputCommandInteraction): Promise<void> {
-  const state = await loadState();
-  const lastPrediction = state.lastPrediction;
-
-  if (!lastPrediction || lastPrediction.safetyStop) {
-    throw new Error("자동결산할 마지막 예측이 없습니다. 먼저 /예측을 실행해주세요.");
-  }
-
-  const settlement = settlePredictions(state, lastPrediction.direction, lastPrediction.delta);
-  const latestIndexEvent = state.indexHistory[0];
-  const chart = latestIndexEvent ? createIndexChartPayload(state, latestIndexEvent) : undefined;
-
-  await saveState(state);
-  await interaction.reply(
-    messagePayload(formatSettlement(settlement, true), {
-      embeds: chart ? [chart.embed] : [],
-      files: chart?.files ?? []
-    })
-  );
+  await interaction.editReply(limitDiscordMessage(content, state.help.maxAnswerLength + 80));
 }
 
 async function handleCommand(interaction: ChatInputCommandInteraction): Promise<void> {
   try {
     switch (interaction.commandName) {
-      case "세냥":
-        await handleSenyangCommand(interaction);
+      case "도움":
+        await handleHelpCommand(interaction);
         return;
-      case "상태": {
-        const state = await loadState();
-        const latestIndexEvent = state.indexHistory[0];
-        const chart = latestIndexEvent ? createIndexChartPayload(state, latestIndexEvent) : undefined;
-        await interaction.reply(
-          messagePayload(formatStatus(state), {
-            embeds: chart ? [chart.embed] : [],
-            files: chart?.files ?? []
-          })
-        );
-        return;
-      }
-      case "예측":
-        await handlePredictionCommand(interaction);
-        return;
-      case "매수":
-        await handleBetCommand(interaction, "상승");
-        return;
-      case "매도":
-        await handleBetCommand(interaction, "하락");
-        return;
-      case "보합":
-        await handleBetCommand(interaction, "보합");
-        return;
-      case "결산":
-        await handleSettlementCommand(interaction);
-        return;
-      case "자동결산":
-        await handleAutoSettlementCommand(interaction);
-        return;
-      case "랭킹": {
-        const state = await loadState();
-        await interaction.reply(limitDiscordMessage(formatRanking(state)));
-        return;
-      }
       default:
-        await interaction.reply({ content: "알 수 없는 세냥장 명령입니다냥.", ephemeral: true });
+        await interaction.reply({ content: "알 수 없는 DOUM 명령입니다.", ephemeral: true });
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : "알 수 없는 오류가 발생했습니다.";
-    const content = `세냥장 처리 중 문제가 생겼어요: ${message}`;
+    const content = `DOUM 처리 중 문제가 생겼습니다: ${message}`;
 
     if (interaction.deferred || interaction.replied) {
       await interaction.editReply(limitDiscordMessage(content));
@@ -227,12 +104,15 @@ async function main(): Promise<void> {
   requireDiscordRuntimeConfig();
 
   const client = new Client({
-    intents: [GatewayIntentBits.Guilds]
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]
   });
+  const serverTagAutomation = new ServerTagAutomation(client);
+  serverTagAutomation.register();
+  startAdminServer({ client, automation: serverTagAutomation });
 
   client.once(Events.ClientReady, (readyClient) => {
     console.log(`Ready! Logged in as ${readyClient.user.tag}`);
-    console.log("Slash command mode enabled. No MessageContent intent is requested.");
+    console.log("DOUM slash command mode enabled. MessageContent intent is not requested.");
   });
 
   client.on(Events.InteractionCreate, async (interaction) => {
@@ -241,6 +121,12 @@ async function main(): Promise<void> {
     }
 
     await handleCommand(interaction);
+
+    if (interaction.inCachedGuild()) {
+      void serverTagAutomation.syncMember(interaction.member, "DOUM 명령 사용 시 서버 태그 자동 확인").catch((error) => {
+        console.error("DOUM server tag interaction sync failed.", error);
+      });
+    }
   });
 
   await client.login(config.discordToken);

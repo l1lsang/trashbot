@@ -1,25 +1,37 @@
-# 세냥 주식 봇
+# DOUM 봇
 
-GPT 기반 디스코드 슬래시 명령 봇입니다. 일반 메시지를 읽지 않고 `/세냥` 명령으로 대화하므로 Discord `MESSAGE CONTENT INTENT`가 필요 없습니다.
-
-이 봇의 “주식”, “매수”, “매도”, “지수”, “냥포인트”는 모두 순수 오락용 표현이며 현실 금전, 상품, 투자, 도박과 연결하지 않습니다.
+GPT 기반 Discord 도움 봇입니다. `/도움` 명령으로 GPT 답변을 호출하고, 서버 태그를 표시한 멤버에게 지정 역할을 자동 지급합니다. 관리자 UI에서 GPT 프롬프트와 서버 태그 역할 설정을 바꿀 수 있습니다.
 
 ## 준비
 
 1. Discord Developer Portal에서 애플리케이션과 Bot을 만듭니다.
-2. OAuth2 URL Generator에서 `bot`, `applications.commands` scope를 선택하고 봇을 서버에 초대합니다.
-3. `.env.example`을 참고해 `.env`를 만듭니다.
-4. 의존성을 설치합니다.
+2. Bot 설정에서 `SERVER MEMBERS INTENT`를 켭니다.
+3. OAuth2 URL Generator에서 `bot`, `applications.commands` scope를 선택합니다.
+4. 봇 권한은 최소 `Manage Roles`, `Use Slash Commands`, `View Channels`가 필요합니다.
+5. `.env.example`을 참고해 `.env`를 만듭니다.
+6. 의존성을 설치합니다.
 
 ```bash
 npm install
 ```
 
-PowerShell에서 `npm.ps1 cannot be loaded` 오류가 나면 Windows 명령 실행 파일을 직접 쓰면 됩니다.
+PowerShell에서 실행 정책 오류가 나면 Windows 명령 실행 파일을 직접 쓰면 됩니다.
 
 ```powershell
 npm.cmd install
 ```
+
+## 환경 변수
+
+- `DISCORD_TOKEN`: Discord 봇 토큰
+- `DISCORD_CLIENT_ID`: Discord 애플리케이션 ID
+- `DISCORD_GUILD_ID`: 테스트/운영 서버 ID. 비우면 전역 슬래시 명령으로 등록합니다.
+- `OPENAI_API_KEY`: GPT 호출용 OpenAI API 키
+- `OPENAI_MODEL`: 사용할 OpenAI 모델
+- `ADMIN_UI_ENABLED`: 관리 UI 사용 여부
+- `ADMIN_UI_HOST`: 관리 UI 바인딩 주소
+- `ADMIN_UI_PORT`: 관리 UI 포트
+- `ADMIN_UI_TOKEN`: 관리 UI API 토큰
 
 ## 실행
 
@@ -27,12 +39,6 @@ npm.cmd install
 
 ```bash
 npm run deploy:commands
-```
-
-PowerShell 실행 정책 오류가 난다면 아래처럼 실행하세요.
-
-```powershell
-npm.cmd run deploy:commands
 ```
 
 개발 모드로 실행합니다.
@@ -48,37 +54,20 @@ npm run build
 npm start
 ```
 
+관리 UI 기본 주소는 `http://127.0.0.1:8787`입니다. 페이지에서 `ADMIN_UI_TOKEN` 값을 입력하면 설정을 저장하고 서버 태그 스캔을 실행할 수 있습니다.
+
 ## 명령어
 
-- `/세냥 메시지:<내용>`: 세냥 봇과 슬래시 명령으로 대화합니다.
-- `/상태`: 현재 세냥 지수와 최근 흐름을 보여줍니다.
-- `/예측 상황:<내용> 현재지수:<선택>`: 상황 설명을 바탕으로 상승/하락/보합을 예측합니다.
-- `/매수`: 상승 예측을 접수합니다.
-- `/매도`: 하락 예측을 접수합니다.
-- `/보합`: 보합 예측을 접수합니다.
-- `/결산 결과:<선택> 지수변화:<선택>`: 결과를 직접 주면 수동 정산하고, 결과를 생략하면 마지막 `/예측` 기준으로 자동 정산합니다.
-- `/자동결산`: 마지막 `/예측` 결과를 기준으로 자동 정산합니다.
-- `/랭킹`: 냥포인트 순위를 보여줍니다.
+- `/도움 질문:<내용>`: DOUM 봇이 GPT로 답변합니다.
 
-## 포인트 규칙
+## 서버 태그 역할
 
-- 모든 사용자는 처음 100냥으로 시작합니다.
-- 예측 1회에 10냥을 사용합니다.
-- 같은 라운드에서 다시 예측하면 기존 예측을 환불하고 새 방향으로 바꿉니다.
-- 결산 시 적중자는 사용한 10냥의 2배인 20냥을 돌려받습니다.
-- 자동결산은 마지막 `/예측`의 방향과 지수 변화값을 게임 결과로 사용합니다.
-- 냥포인트는 현실 가치가 없는 오락용 점수입니다.
+관리 UI에서 다음 값을 설정합니다.
 
-## 세냥 지수 차트
+- `관리 서버 ID`: 역할을 지급할 Discord 서버 ID
+- `태그 기준 서버 ID`: 사용자가 표시해야 하는 서버 태그의 원본 서버 ID. 보통 관리 서버 ID와 같습니다.
+- `태그 문자열`: 특정 태그 텍스트까지 확인할 때만 입력합니다.
+- `지급 역할 ID`: 이미 만든 역할을 쓰려면 입력합니다.
+- `지급 역할 이름`: 역할 ID가 없을 때 찾거나 새로 만들 역할 이름입니다.
 
-`/결산`처럼 세냥 지수가 변동되면 Discord 임베드 UI에 PNG 라인 차트 이미지가 함께 표시됩니다.
-
-- 최근 지수 흐름은 `data/state.json`의 `indexHistory`에 저장됩니다.
-- `/상태`를 실행해도 최근 차트를 다시 볼 수 있습니다.
-- 차트 이미지는 봇이 직접 생성해 `senyang-chart.png` 첨부 파일로 표시합니다.
-
-## 슬래시 대화
-
-`/세냥 메시지:<내용>`을 사용하면 세냥과 대화할 수 있습니다. 대화 맥락은 실행 중 메모리에만 짧게 유지하며, 기본 상태 파일에는 게임 점수와 라운드 정보만 저장합니다.
-
-`Error: Used disallowed intents`가 뜨면 오래된 배포본이 아직 `MessageContent` intent를 요청하는 상태일 수 있습니다. 최신 코드로 빌드 후 재배포하면 봇은 `Guilds` intent만 사용합니다.
+봇의 최고 역할이 지급할 역할보다 위에 있어야 역할을 추가/회수할 수 있습니다.
