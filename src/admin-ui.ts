@@ -123,7 +123,7 @@ function applySettingsPatch(state: DoumState, guildId: string, patch: unknown): 
   return settings;
 }
 
-function runtimePayload(client: Client): unknown {
+function runtimePayload(client: Client): Record<string, unknown> {
   return {
     botReady: client.isReady(),
     botUser: client.user?.tag ?? null,
@@ -135,7 +135,7 @@ function runtimePayload(client: Client): unknown {
   };
 }
 
-function statePayload(client: Client, state: DoumState, guildId: string): unknown {
+function statePayload(client: Client, state: DoumState, guildId: string): Record<string, unknown> {
   const settings = getGuildSettings(state, guildId);
 
   return {
