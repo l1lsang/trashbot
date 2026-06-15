@@ -1,4 +1,4 @@
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+﻿import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { Client } from "discord.js";
 import { config } from "./config.js";
 import { ensureGuildSettings, getGuildSettings, loadState, saveState } from "./storage.js";
@@ -577,6 +577,23 @@ function adminHtml(): string {
       return item;
     }
 
+    function formatKoreanTime(value) {
+      if (!value) return "-";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+
+      return new Intl.DateTimeFormat("ko-KR", {
+        timeZone: "Asia/Seoul",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false
+      }).format(date) + " KST";
+    }
+
     function renderGuildSelect(runtime, selectedId) {
       runtimeGuilds = runtime && runtime.guilds ? runtime.guilds : [];
       const select = el("guildSelect");
@@ -623,7 +640,7 @@ function adminHtml(): string {
       }
 
       target.replaceChildren(
-        metric("최근 스캔", summary.scannedAt || "-"),
+        metric("최근 스캔", formatKoreanTime(summary.scannedAt)),
         metric("확인", String(summary.checked || 0)),
         metric("태그 일치", String(summary.matched || 0)),
         metric("지급", String(summary.granted || 0)),
@@ -805,3 +822,4 @@ export function startAdminServer(options: AdminServerOptions): Server | undefine
 
   return server;
 }
+
