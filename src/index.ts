@@ -7,7 +7,7 @@ import {
 } from "discord.js";
 import { startAdminServer } from "./admin-ui.js";
 import { generateHelpReply } from "./ai.js";
-import { config, requireDiscordRuntimeConfig } from "./config.js";
+import { config, requireDiscordBotConfig } from "./config.js";
 import { ServerTagAutomation, type ServerTagBulkScanSummary } from "./server-tag.js";
 import { getGuildSettings, loadState } from "./storage.js";
 import type { ChatMemoryItem } from "./types.js";
@@ -194,7 +194,7 @@ async function handleCommand(
 }
 
 async function main(): Promise<void> {
-  requireDiscordRuntimeConfig();
+  requireDiscordBotConfig();
 
   const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]

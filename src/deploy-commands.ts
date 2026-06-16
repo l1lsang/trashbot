@@ -1,9 +1,9 @@
 import { REST, Routes } from "discord.js";
-import { config, requireDiscordRuntimeConfig } from "./config.js";
+import { config, requireDiscordCommandConfig } from "./config.js";
 import { commandsJson } from "./commands.js";
 
 async function main(): Promise<void> {
-  requireDiscordRuntimeConfig();
+  requireDiscordCommandConfig();
 
   const rest = new REST({ version: "10" }).setToken(config.discordToken);
   const route = config.discordGuildId

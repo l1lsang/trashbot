@@ -37,15 +37,23 @@ export const config = {
   adminUiToken: process.env.ADMIN_UI_TOKEN ?? ""
 };
 
-export function requireDiscordRuntimeConfig(): void {
-  const missing = [
-    ["DISCORD_TOKEN", config.discordToken],
-    ["DISCORD_CLIENT_ID", config.discordClientId]
-  ].filter(([, value]) => !value);
+function requireEnvValues(entries: Array<[string, string]>): void {
+  const missing = entries.filter(([, value]) => !value);
 
   if (missing.length > 0) {
     throw new Error(`Missing required env: ${missing.map(([name]) => name).join(", ")}`);
   }
+}
+
+export function requireDiscordBotConfig(): void {
+  requireEnvValues([["DISCORD_TOKEN", config.discordToken]]);
+}
+
+export function requireDiscordCommandConfig(): void {
+  requireEnvValues([
+    ["DISCORD_TOKEN", config.discordToken],
+    ["DISCORD_CLIENT_ID", config.discordClientId]
+  ]);
 }
 
 
