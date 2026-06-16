@@ -11,6 +11,18 @@ interface MemberSyncResult {
   skipped: boolean;
 }
 
+export interface ServerTagScanFailure {
+  guildId: string;
+  guildName: string;
+  message: string;
+}
+
+export interface ServerTagBulkScanSummary {
+  guildCount: number;
+  summaries: ServerTagScanSummary[];
+  failures: ServerTagScanFailure[];
+}
+
 function now(): string {
   return new Date().toISOString();
 }
@@ -246,6 +258,34 @@ export class ServerTagAutomation {
     }
 
     return scanGuildServerTags(this.client, guildId);
+  }
+
+  async scanAllNow(): Promise<ServerTagBulkScanSummary> {
+    if (!this.client.isReady()) {
+      throw new Error("Discord 클라이언트가 아직 준비되지 않았습니다.");
+    }
+
+    const guilds = [...this.client.guilds.cache.values()];
+    const result: ServerTagBulkScanSummary = {
+      guildCount: guilds.length,
+      summaries: [],
+      failures: []
+    };
+
+    for (const guild of guilds) {
+      try {
+        result.summaries.push(await scanGuildServerTags(this.client, guild.id));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "알 수 없는 오류";
+        result.failures.push({
+          guildId: guild.id,
+          guildName: guild.name,
+          message
+        });
+      }
+    }
+
+    return result;
   }
 
   async syncMember(member: GuildMember, reason?: string): Promise<void> {
