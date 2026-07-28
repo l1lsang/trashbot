@@ -1,6 +1,6 @@
 import { Client, Events, Guild, GuildMember, PermissionFlagsBits, User, type Role } from "discord.js";
 import { config } from "./config.js";
-import { ensureGuildSettings, getGuildSettings, loadState, saveState } from "./storage.js";
+import { ensureGuildSettings, getGuildSettings, loadState, mutateState } from "./storage.js";
 import type { GuildSettings, ServerTagScanSummary } from "./types.js";
 
 interface MemberSyncResult {
@@ -121,7 +121,8 @@ function userMatchesServerTag(user: User, settings: GuildSettings, fallbackGuild
 export async function syncMemberServerTagRole(
   member: GuildMember,
   settings: GuildSettings,
-  reason = "DOUM 서버 태그 자동 동기화"
+  reason = "DOUM 서버 태그 자동 동기화",
+  refreshUser = true
 ): Promise<MemberSyncResult> {
   if (!settings.serverTag.enabled || member.user.bot) {
     return {
@@ -134,7 +135,7 @@ export async function syncMemberServerTagRole(
   }
 
   const role = await ensureTagRole(member.guild, settings);
-  const freshUser = await fetchFreshUser(member.user);
+  const freshUser = refreshUser ? await fetchFreshUser(member.user) : member.user;
   const matched = userMatchesServerTag(freshUser, settings, member.guild.id);
   const hasRole = member.roles.cache.has(role.id);
 
@@ -169,95 +170,115 @@ function createSummary(guild: Guild, scannedAt = now()): ServerTagScanSummary {
 }
 
 export async function scanGuildServerTags(client: Client, guildId: string): Promise<ServerTagScanSummary> {
-  const state = await loadState();
-  const guild = await resolveGuild(client, guildId);
-  const settings = ensureGuildSettings(state, guild.id, guild.name);
-  const summary = createSummary(guild);
+  return mutateState(async (state) => {
+    const guild = await resolveGuild(client, guildId);
+    const settings = ensureGuildSettings(state, guild.id, guild.name);
+    const summary = createSummary(guild);
 
-  if (!settings.serverTag.enabled) {
-    summary.skipped = 1;
-    summary.errors.push("이 서버의 태그 자동지급이 꺼져 있습니다.");
-    settings.serverTag.lastScanAt = summary.scannedAt;
-    settings.serverTag.lastScanSummary = summary;
-    settings.updatedAt = summary.scannedAt;
-    await saveState(state);
-    return summary;
-  }
-
-  try {
-    await ensureTagRole(guild, settings);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "지급 역할을 준비하지 못했습니다.";
-    summary.errors.push(message);
-    settings.serverTag.lastScanAt = summary.scannedAt;
-    settings.serverTag.lastScanSummary = summary;
-    settings.updatedAt = summary.scannedAt;
-    await saveState(state);
-    return summary;
-  }
-
-  try {
-    await guild.members.fetch();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "멤버 목록을 가져오지 못했습니다.";
-    summary.errors.push(message);
-    settings.serverTag.lastScanAt = summary.scannedAt;
-    settings.serverTag.lastScanSummary = summary;
-    settings.updatedAt = summary.scannedAt;
-    await saveState(state);
-    return summary;
-  }
-
-  for (const member of guild.members.cache.values()) {
-    summary.checked += 1;
+    if (!settings.serverTag.enabled) {
+      summary.skipped = 1;
+      summary.errors.push("이 서버의 태그 자동지급이 꺼져 있습니다.");
+      settings.serverTag.lastScanAt = summary.scannedAt;
+      settings.serverTag.lastScanSummary = summary;
+      settings.updatedAt = summary.scannedAt;
+      return summary;
+    }
 
     try {
-      const result = await syncMemberServerTagRole(member, settings);
-
-      if (result.matched) summary.matched += 1;
-      if (result.granted) summary.granted += 1;
-      if (result.removed) summary.removed += 1;
-      if (result.unchanged) summary.unchanged += 1;
-      if (result.skipped) summary.skipped += 1;
+      await ensureTagRole(guild, settings);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "알 수 없는 오류";
-      summary.errors.push(`${member.user.tag ?? member.user.id}: ${message}`);
+      const message = error instanceof Error ? error.message : "지급 역할을 준비하지 못했습니다.";
+      summary.errors.push(message);
+      settings.serverTag.lastScanAt = summary.scannedAt;
+      settings.serverTag.lastScanSummary = summary;
+      settings.updatedAt = summary.scannedAt;
+      return summary;
     }
-  }
 
-  summary.errors = summary.errors.slice(0, 20);
-  settings.serverTag.lastScanAt = summary.scannedAt;
-  settings.serverTag.lastScanSummary = summary;
-  settings.updatedAt = summary.scannedAt;
-  await saveState(state);
-  return summary;
+    let members: Awaited<ReturnType<typeof guild.members.fetch>>;
+
+    try {
+      members = await guild.members.fetch();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "멤버 목록을 가져오지 못했습니다.";
+      summary.errors.push(message);
+      settings.serverTag.lastScanAt = summary.scannedAt;
+      settings.serverTag.lastScanSummary = summary;
+      settings.updatedAt = summary.scannedAt;
+      return summary;
+    }
+
+    for (const member of members.values()) {
+      summary.checked += 1;
+
+      try {
+        // guild.members.fetch() already returns fresh user payloads, including primaryGuild.
+        // Fetching every user again turns one scan into hundreds of rate-limited REST calls.
+        const result = await syncMemberServerTagRole(member, settings, undefined, false);
+
+        if (result.matched) summary.matched += 1;
+        if (result.granted) summary.granted += 1;
+        if (result.removed) summary.removed += 1;
+        if (result.unchanged) summary.unchanged += 1;
+        if (result.skipped) summary.skipped += 1;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "알 수 없는 오류";
+        summary.errors.push(`${member.user.tag ?? member.user.id}: ${message}`);
+      }
+    }
+
+    summary.errors = summary.errors.slice(0, 20);
+    settings.serverTag.lastScanAt = summary.scannedAt;
+    settings.serverTag.lastScanSummary = summary;
+    settings.updatedAt = summary.scannedAt;
+    return summary;
+  });
 }
 
 export class ServerTagAutomation {
   private readonly scanTimers = new Map<string, NodeJS.Timeout>();
+  private readonly activeScans = new Map<string, Promise<ServerTagScanSummary>>();
+  private operationQueue: Promise<void> = Promise.resolve();
 
   constructor(private readonly client: Client) {}
 
   register(): void {
     this.client.once(Events.ClientReady, () => {
-      void this.handleReady();
+      void this.handleReady().catch((error) => {
+        console.error("DOUM server tag automation failed to initialize.", error);
+      });
     });
 
     this.client.on(Events.GuildMemberAdd, (member) => {
-      void this.syncMember(member, "DOUM 서버 태그 신규 멤버 자동 확인");
+      void this.syncMember(member, "DOUM 서버 태그 신규 멤버 자동 확인").catch((error) => {
+        console.error(`DOUM server tag member sync failed for ${member.guild.id}/${member.id}.`, error);
+      });
     });
 
     this.client.on(Events.UserUpdate, (_oldUser, newUser) => {
-      void this.syncUserAcrossGuilds(newUser.id, "DOUM 서버 태그 변경 자동 확인");
+      void this.syncUserAcrossGuilds(newUser.id, "DOUM 서버 태그 변경 자동 확인").catch((error) => {
+        console.error(`DOUM server tag user update sync failed for ${newUser.id}.`, error);
+      });
     });
   }
 
-  async scanNow(guildId: string): Promise<ServerTagScanSummary> {
+  scanNow(guildId: string): Promise<ServerTagScanSummary> {
     if (!this.client.isReady()) {
-      throw new Error("Discord 클라이언트가 아직 준비되지 않았습니다.");
+      return Promise.reject(new Error("Discord 클라이언트가 아직 준비되지 않았습니다."));
     }
 
-    return scanGuildServerTags(this.client, guildId);
+    const activeScan = this.activeScans.get(guildId);
+    if (activeScan) {
+      return activeScan;
+    }
+
+    const scan = this.enqueueOperation(() => scanGuildServerTags(this.client, guildId));
+    this.activeScans.set(guildId, scan);
+    void scan.then(
+      () => this.clearActiveScan(guildId, scan),
+      () => this.clearActiveScan(guildId, scan)
+    );
+    return scan;
   }
 
   async scanAllNow(): Promise<ServerTagBulkScanSummary> {
@@ -274,7 +295,7 @@ export class ServerTagAutomation {
 
     for (const guild of guilds) {
       try {
-        result.summaries.push(await scanGuildServerTags(this.client, guild.id));
+        result.summaries.push(await this.scanNow(guild.id));
       } catch (error) {
         const message = error instanceof Error ? error.message : "알 수 없는 오류";
         result.failures.push({
@@ -289,31 +310,33 @@ export class ServerTagAutomation {
   }
 
   async syncMember(member: GuildMember, reason?: string): Promise<void> {
-    const state = await loadState();
-    const settings = ensureGuildSettings(state, member.guild.id, member.guild.name);
-    await syncMemberServerTagRole(member, settings, reason);
-    await saveState(state);
+    await this.enqueueOperation(async () => {
+      await mutateState(async (state) => {
+        const settings = ensureGuildSettings(state, member.guild.id, member.guild.name);
+        await syncMemberServerTagRole(member, settings, reason);
+      });
+    });
   }
 
   async syncUserAcrossGuilds(userId: string, reason?: string): Promise<void> {
-    const state = await loadState();
+    await this.enqueueOperation(async () => {
+      await mutateState(async (state) => {
+        for (const guild of this.client.guilds.cache.values()) {
+          const settings = getGuildSettings(state, guild.id);
+          if (!settings.serverTag.enabled) {
+            continue;
+          }
 
-    for (const guild of this.client.guilds.cache.values()) {
-      const settings = getGuildSettings(state, guild.id);
-      if (!settings.serverTag.enabled) {
-        continue;
-      }
+          const member = await guild.members.fetch({ user: userId, force: true }).catch(() => null);
+          if (!member) {
+            continue;
+          }
 
-      const member = await guild.members.fetch(userId).catch(() => null);
-      if (!member) {
-        continue;
-      }
-
-      await syncMemberServerTagRole(member, settings, reason);
-      state.guildSettings[guild.id] = settings;
-    }
-
-    await saveState(state);
+          await syncMemberServerTagRole(member, settings, reason, false);
+          state.guildSettings[guild.id] = settings;
+        }
+      });
+    });
   }
 
   async rescheduleFromState(): Promise<void> {
@@ -330,16 +353,19 @@ export class ServerTagAutomation {
       }
 
       const timer = setInterval(() => {
-        void this.scanNow(guildId).catch((error) => {
-          console.error(`DOUM server tag scheduled scan failed for ${guildId}.`, error);
-        });
+        void this.runScheduledScan(guildId);
       }, settings.serverTag.scanIntervalMinutes * 60_000);
 
       this.scanTimers.set(guildId, timer);
+      console.log(
+        `DOUM server tag scan scheduled for ${guildId}: every ${settings.serverTag.scanIntervalMinutes} minute(s).`
+      );
     }
   }
 
   private async handleReady(): Promise<void> {
+    // Install timers before startup scans so a slow startup scan cannot prevent scheduling.
+    await this.rescheduleFromState();
     const state = await loadState();
 
     for (const [guildId, settings] of Object.entries(state.guildSettings)) {
@@ -349,7 +375,36 @@ export class ServerTagAutomation {
         });
       }
     }
+  }
 
-    await this.rescheduleFromState();
+  private enqueueOperation<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.operationQueue.then(operation, operation);
+    this.operationQueue = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
+  }
+
+  private clearActiveScan(guildId: string, scan: Promise<ServerTagScanSummary>): void {
+    if (this.activeScans.get(guildId) === scan) {
+      this.activeScans.delete(guildId);
+    }
+  }
+
+  private async runScheduledScan(guildId: string): Promise<void> {
+    if (this.activeScans.has(guildId)) {
+      console.log(`DOUM server tag scheduled scan skipped for ${guildId}: previous scan is still running.`);
+      return;
+    }
+
+    try {
+      const summary = await this.scanNow(guildId);
+      console.log(
+        `DOUM server tag scheduled scan completed for ${guildId}: checked=${summary.checked}, matched=${summary.matched}, granted=${summary.granted}, removed=${summary.removed}, errors=${summary.errors.length}.`
+      );
+    } catch (error) {
+      console.error(`DOUM server tag scheduled scan failed for ${guildId}.`, error);
+    }
   }
 }

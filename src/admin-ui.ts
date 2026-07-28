@@ -1,7 +1,7 @@
 ﻿import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { Client } from "discord.js";
 import { config } from "./config.js";
-import { ensureGuildSettings, getGuildSettings, loadState, saveState } from "./storage.js";
+import { ensureGuildSettings, getGuildSettings, loadState, mutateState } from "./storage.js";
 import type { DoumState, GuildSettings } from "./types.js";
 import type { ServerTagAutomation } from "./server-tag.js";
 
@@ -183,9 +183,9 @@ async function handleApi(
     const body = await readJsonBody(request);
     const raw = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const guildId = selectedGuildId(client, stringSetting(raw.guildId, "", 32));
-    const state = await loadState();
-    applySettingsPatch(state, guildId, raw);
-    await saveState(state);
+    await mutateState((state) => {
+      applySettingsPatch(state, guildId, raw);
+    });
     await automation.rescheduleFromState();
     sendJson(response, 200, statePayload(client, await loadState(), guildId));
     return;

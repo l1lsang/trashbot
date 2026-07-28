@@ -3,6 +3,8 @@ import path from "node:path";
 import { config } from "./config.js";
 import type { DoumState, GuildSettings, HelpSettings, ServerTagScanSummary, ServerTagSettings } from "./types.js";
 
+let stateMutationQueue: Promise<void> = Promise.resolve();
+
 function now(): string {
   return new Date().toISOString();
 }
@@ -281,4 +283,19 @@ export async function saveState(state: DoumState): Promise<void> {
 
   await fs.mkdir(path.dirname(config.dataFile), { recursive: true });
   await fs.writeFile(config.dataFile, `${JSON.stringify(normalized, null, 2)}\n`, "utf8");
+}
+
+export function mutateState<T>(mutation: (state: DoumState) => T | Promise<T>): Promise<T> {
+  const run = async (): Promise<T> => {
+    const state = await loadState();
+    const result = await mutation(state);
+    await saveState(state);
+    return result;
+  };
+  const result = stateMutationQueue.then(run, run);
+  stateMutationQueue = result.then(
+    () => undefined,
+    () => undefined
+  );
+  return result;
 }
