@@ -11,6 +11,11 @@ interface MemberSyncResult {
   skipped: boolean;
 }
 
+const GUILD_MEMBER_REQUEST_MIN_INTERVAL_MS = 12_000;
+const GUILD_MEMBER_REQUEST_MAX_RETRIES = 2;
+let guildMemberRequestQueue: Promise<void> = Promise.resolve();
+let nextGuildMemberRequestAt = 0;
+
 export interface ServerTagScanFailure {
   guildId: string;
   guildName: string;
@@ -29,6 +34,65 @@ function now(): string {
 
 function normalizeTag(value: string | null | undefined): string {
   return (value ?? "").trim().toLowerCase();
+}
+
+function wait(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function gatewayRetryAfterMilliseconds(error: unknown): number | null {
+  if (!error || typeof error !== "object" || !("data" in error)) {
+    return null;
+  }
+
+  const data = (error as { data?: unknown }).data;
+  if (!data || typeof data !== "object") {
+    return null;
+  }
+
+  const { opcode, retry_after: retryAfter } = data as { opcode?: unknown; retry_after?: unknown };
+  if (opcode !== 8 || typeof retryAfter !== "number" || !Number.isFinite(retryAfter) || retryAfter < 0) {
+    return null;
+  }
+
+  return Math.ceil(retryAfter * 1_000) + 250;
+}
+
+async function fetchGuildMembersWithRateLimit(guild: Guild): Promise<Awaited<ReturnType<typeof guild.members.fetch>>> {
+  const run = async (): Promise<Awaited<ReturnType<typeof guild.members.fetch>>> => {
+    for (let attempt = 0; attempt <= GUILD_MEMBER_REQUEST_MAX_RETRIES; attempt += 1) {
+      const waitMilliseconds = Math.max(0, nextGuildMemberRequestAt - Date.now());
+      if (waitMilliseconds > 0) {
+        await wait(waitMilliseconds);
+      }
+
+      nextGuildMemberRequestAt = Date.now() + GUILD_MEMBER_REQUEST_MIN_INTERVAL_MS;
+
+      try {
+        return await guild.members.fetch();
+      } catch (error) {
+        const retryAfterMilliseconds = gatewayRetryAfterMilliseconds(error);
+        if (retryAfterMilliseconds === null || attempt === GUILD_MEMBER_REQUEST_MAX_RETRIES) {
+          throw error;
+        }
+
+        nextGuildMemberRequestAt = Math.max(nextGuildMemberRequestAt, Date.now() + retryAfterMilliseconds);
+        const effectiveWaitSeconds = Math.ceil(Math.max(0, nextGuildMemberRequestAt - Date.now()) / 1_000);
+        console.warn(
+          `DOUM guild member request was rate limited for ${guild.id}; retrying in ${effectiveWaitSeconds} second(s).`
+        );
+      }
+    }
+
+    throw new Error("Discord 멤버 요청 재시도 횟수를 초과했습니다.");
+  };
+
+  const result = guildMemberRequestQueue.then(run, run);
+  guildMemberRequestQueue = result.then(
+    () => undefined,
+    () => undefined
+  );
+  return result;
 }
 
 function configuredTargetGuildId(settings: GuildSettings, fallbackGuildId: string): string {
@@ -198,7 +262,7 @@ export async function scanGuildServerTags(client: Client, guildId: string): Prom
     let members: Awaited<ReturnType<typeof guild.members.fetch>>;
 
     try {
-      members = await guild.members.fetch();
+      members = await fetchGuildMembersWithRateLimit(guild);
     } catch (error) {
       const message = error instanceof Error ? error.message : "멤버 목록을 가져오지 못했습니다.";
       summary.errors.push(message);
