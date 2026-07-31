@@ -35,9 +35,25 @@ export interface ServerTagSettings {
   lastScanSummary?: ServerTagScanSummary;
 }
 
+export interface BumpUserStats {
+  userId: string;
+  username: string;
+  count: number;
+  lastBumpAt: string;
+}
+
+export interface BumpStats {
+  total: number;
+  users: Record<string, BumpUserStats>;
+  processedMessageIds: string[];
+  lastBumpAt?: string;
+  lastResetAt?: string;
+}
+
 export interface GuildSettings {
   help: HelpSettings;
   serverTag: ServerTagSettings;
+  bumpStats: BumpStats;
   updatedAt: string;
 }
 

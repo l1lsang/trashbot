@@ -1,6 +1,6 @@
 # DOUM 봇
 
-GPT 기반 Discord 도움 봇입니다. `/도움` 명령으로 GPT 답변을 호출하고, 서버 태그를 표시한 멤버에게 지정 역할을 자동 지급합니다. 관리자 UI에서 GPT 프롬프트와 서버 태그 역할 설정을 바꿀 수 있습니다.
+GPT 기반 Discord 도움 봇입니다. `/도움` 명령으로 GPT 답변을 호출하고, 서버 태그 역할을 자동 지급하며, DISBOARD `/bump` 사용 통계를 기록합니다. 관리자 UI에서 GPT 프롬프트와 서버 태그 역할 설정을 바꿀 수 있습니다.
 
 ## 준비
 
@@ -26,6 +26,7 @@ npm.cmd install
 - `DISCORD_TOKEN`: Discord 봇 토큰
 - `DISCORD_CLIENT_ID`: Discord 애플리케이션 ID
 - `DISCORD_GUILD_ID`: 테스트/운영 서버 ID. 비우면 전역 슬래시 명령으로 등록합니다.
+- `DISBOARD_BOT_ID`: 추적할 DISBOARD 봇 ID. 생략하면 공식 봇 ID를 사용합니다.
 - `OPENAI_API_KEY`: GPT 호출용 OpenAI API 키
 - `OPENAI_MODEL`: 사용할 OpenAI 모델
 - `ADMIN_UI_ENABLED`: 관리 UI 사용 여부
@@ -64,6 +65,10 @@ npm start
 
 - `/도움 질문:<내용>`: DOUM 봇이 GPT로 답변합니다.
 - `/업데이트 범위:<전체 서버|현재 서버>`: 서버 태그 역할을 즉시 동기화합니다. 범위를 생략하면 봇이 참여 중인 모든 Discord 서버를 스캔합니다. 역할 관리 권한이 있는 사용자만 사용할 수 있습니다.
+- `/범프통계 [사용자]`: 서버의 DISBOARD `/bump` 총 사용 횟수와 사용자 순위를 조회합니다. 사용자를 지정하면 해당 사용자 기록만 표시합니다.
+- `/범프초기화 [사용자]`: 범프 통계를 초기화합니다. 사용자를 생략하면 서버 전체 기록을 지웁니다. 서버 관리 권한이 있는 사용자만 사용할 수 있습니다.
+
+범프 통계는 DISBOARD가 보낸 명령 응답의 상호작용 정보를 추적하므로 `MESSAGE CONTENT INTENT`가 필요하지 않습니다. 봇이 실행 중일 때 새로 발생한 `/bump`부터 서버별로 기록합니다.
 
 ## 서버 태그 역할
 

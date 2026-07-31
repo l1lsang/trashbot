@@ -28,6 +28,7 @@ export const config = {
   discordToken: process.env.DISCORD_TOKEN ?? "",
   discordClientId: process.env.DISCORD_CLIENT_ID ?? "",
   discordGuildId: process.env.DISCORD_GUILD_ID ?? "",
+  disboardBotId: process.env.DISBOARD_BOT_ID?.trim() || "302050872383242240",
   openaiApiKey: process.env.OPENAI_API_KEY ?? "",
   openaiModel: process.env.OPENAI_MODEL ?? "gpt-5.5",
   dataFile: path.join(process.cwd(), "data", "doum-state.json"),

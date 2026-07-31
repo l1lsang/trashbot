@@ -1,7 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config.js";
-import type { DoumState, GuildSettings, HelpSettings, ServerTagScanSummary, ServerTagSettings } from "./types.js";
+import type {
+  BumpStats,
+  BumpUserStats,
+  DoumState,
+  GuildSettings,
+  HelpSettings,
+  ServerTagScanSummary,
+  ServerTagSettings
+} from "./types.js";
 
 let stateMutationQueue: Promise<void> = Promise.resolve();
 
@@ -62,10 +70,19 @@ function createDefaultServerTagSettings(guildId = "", enabled = false): ServerTa
   };
 }
 
+function createDefaultBumpStats(): BumpStats {
+  return {
+    total: 0,
+    users: {},
+    processedMessageIds: []
+  };
+}
+
 export function createDefaultGuildSettings(guildId = "", enabled = false): GuildSettings {
   return {
     help: createDefaultHelpSettings(),
     serverTag: createDefaultServerTagSettings(guildId, enabled),
+    bumpStats: createDefaultBumpStats(),
     updatedAt: now()
   };
 }
@@ -137,12 +154,61 @@ function normalizeServerTagSettings(
   };
 }
 
+function normalizeBumpUserStats(value: unknown, userIdFallback: string): BumpUserStats | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+
+  const raw = value as Partial<BumpUserStats>;
+  const userId = stringValue(raw.userId, userIdFallback, 32);
+  const count = clampInteger(raw.count, 0, 0, Number.MAX_SAFE_INTEGER);
+  if (!userId || count === 0) {
+    return undefined;
+  }
+
+  return {
+    userId,
+    username: stringValue(raw.username, "알 수 없는 사용자", 100),
+    count,
+    lastBumpAt: stringValue(raw.lastBumpAt, "", 40)
+  };
+}
+
+function normalizeBumpStats(value: unknown): BumpStats {
+  const raw = value && typeof value === "object" ? (value as Partial<BumpStats>) : {};
+  const users: Record<string, BumpUserStats> = {};
+
+  if (raw.users && typeof raw.users === "object") {
+    for (const [rawUserId, rawStats] of Object.entries(raw.users)) {
+      const userId = stringValue(rawUserId, "", 32);
+      const stats = normalizeBumpUserStats(rawStats, userId);
+      if (userId && stats) {
+        users[userId] = stats;
+      }
+    }
+  }
+
+  const calculatedTotal = Object.values(users).reduce((sum, stats) => sum + stats.count, 0);
+  const processedMessageIds = Array.isArray(raw.processedMessageIds)
+    ? [...new Set(raw.processedMessageIds.map((id) => stringValue(id, "", 32)).filter(Boolean))].slice(-500)
+    : [];
+
+  return {
+    total: calculatedTotal,
+    users,
+    processedMessageIds,
+    lastBumpAt: stringValue(raw.lastBumpAt, "", 40) || undefined,
+    lastResetAt: stringValue(raw.lastResetAt, "", 40) || undefined
+  };
+}
+
 function normalizeGuildSettings(value: unknown, fallback: GuildSettings, guildId: string): GuildSettings {
   const raw = value && typeof value === "object" ? (value as Partial<GuildSettings>) : {};
 
   return {
     help: normalizeHelpSettings(raw.help, fallback.help),
     serverTag: normalizeServerTagSettings(raw.serverTag, fallback.serverTag, guildId),
+    bumpStats: normalizeBumpStats(raw.bumpStats),
     updatedAt: stringValue(raw.updatedAt, now())
   };
 }
@@ -177,6 +243,7 @@ export function normalizeState(value: unknown): DoumState {
   const legacyFallback: GuildSettings = {
     help,
     serverTag,
+    bumpStats: createDefaultBumpStats(),
     updatedAt: stringValue(raw.updatedAt, now())
   };
   const guildSettings = normalizeGuildSettingsMap(raw.guildSettings, legacyFallback);
@@ -200,6 +267,7 @@ export function ensureGuildSettings(state: DoumState, guildId: string, guildName
     return {
       help: state.help,
       serverTag: state.serverTag,
+      bumpStats: createDefaultBumpStats(),
       updatedAt: state.updatedAt
     };
   }
@@ -241,6 +309,7 @@ export function getGuildSettings(state: DoumState, guildId: string | null | unde
     return {
       help: state.help,
       serverTag: state.serverTag,
+      bumpStats: createDefaultBumpStats(),
       updatedAt: state.updatedAt
     };
   }
@@ -256,6 +325,7 @@ export function getGuildSettings(state: DoumState, guildId: string | null | unde
       lastScanAt: "",
       lastScanSummary: undefined
     },
+    bumpStats: createDefaultBumpStats(),
     updatedAt: state.updatedAt
   };
 }

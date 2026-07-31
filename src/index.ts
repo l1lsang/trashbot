@@ -3,10 +3,12 @@ import {
   Client,
   Events,
   GatewayIntentBits,
-  PermissionFlagsBits
+  PermissionFlagsBits,
+  type Message
 } from "discord.js";
 import { startAdminServer } from "./admin-ui.js";
 import { generateHelpReply } from "./ai.js";
+import { recordBump, resetBumpStats, trackedBumpFromMessage } from "./bump.js";
 import { config, requireDiscordBotConfig } from "./config.js";
 import { ServerTagAutomation, type ServerTagBulkScanSummary } from "./server-tag.js";
 import { getGuildSettings, loadState } from "./storage.js";
@@ -166,6 +168,95 @@ async function handleUpdateCommand(
   await interaction.editReply(formatBulkScanSummary(result, scope));
 }
 
+function discordTimestamp(value: string | undefined): string {
+  if (!value) {
+    return "-";
+  }
+
+  const milliseconds = Date.parse(value);
+  return Number.isFinite(milliseconds) ? `<t:${Math.floor(milliseconds / 1000)}:R>` : "-";
+}
+
+async function handleBumpStatsCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+  const guildId = interaction.guildId;
+  if (!guildId) {
+    await interaction.reply({ content: "`/범프통계`는 Discord 서버 안에서만 사용할 수 있습니다.", ephemeral: true });
+    return;
+  }
+
+  const state = await loadState();
+  const stats = getGuildSettings(state, guildId).bumpStats;
+  const target = interaction.options.getUser("사용자");
+
+  if (target) {
+    const userStats = stats.users[target.id];
+    const content = userStats
+      ? [`<@${target.id}>님의 범프 통계`, `사용 횟수: **${userStats.count.toLocaleString("ko-KR")}회**`, `최근 사용: ${discordTimestamp(userStats.lastBumpAt)}`].join("\n")
+      : `<@${target.id}>님의 기록된 범프 사용 내역이 없습니다.`;
+    await interaction.reply({ content, allowedMentions: { parse: [] } });
+    return;
+  }
+
+  const ranking = Object.values(stats.users).sort(
+    (left, right) => right.count - left.count || Date.parse(right.lastBumpAt) - Date.parse(left.lastBumpAt)
+  );
+  if (ranking.length === 0) {
+    await interaction.reply("아직 기록된 범프 사용 내역이 없습니다.");
+    return;
+  }
+
+  const visibleRanking = ranking.slice(0, 20).map(
+    (userStats, index) =>
+      `${index + 1}. <@${userStats.userId}> — **${userStats.count.toLocaleString("ko-KR")}회** · 최근 ${discordTimestamp(userStats.lastBumpAt)}`
+  );
+  const hiddenCount = ranking.length - visibleRanking.length;
+  const lines = [
+    "**DISBOARD 범프 통계**",
+    `총 **${stats.total.toLocaleString("ko-KR")}회** · 참여 **${ranking.length.toLocaleString("ko-KR")}명**`,
+    "",
+    ...visibleRanking
+  ];
+  if (hiddenCount > 0) {
+    lines.push(``, `외 ${hiddenCount.toLocaleString("ko-KR")}명`);
+  }
+
+  await interaction.reply({ content: limitDiscordMessage(lines.join("\n")), allowedMentions: { parse: [] } });
+}
+
+async function handleBumpResetCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+  const guildId = interaction.guildId;
+  if (!guildId) {
+    await interaction.reply({ content: "`/범프초기화`는 Discord 서버 안에서만 사용할 수 있습니다.", ephemeral: true });
+    return;
+  }
+
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+    await interaction.reply({ content: "`/범프초기화`는 서버 관리 권한이 있는 사용자만 사용할 수 있습니다.", ephemeral: true });
+    return;
+  }
+
+  const target = interaction.options.getUser("사용자");
+  const removed = await resetBumpStats(guildId, target?.id);
+  const content = target
+    ? `<@${target.id}>님의 범프 기록 ${removed.toLocaleString("ko-KR")}회를 초기화했습니다.`
+    : `이 서버의 범프 기록 ${removed.toLocaleString("ko-KR")}회를 모두 초기화했습니다.`;
+  await interaction.reply({ content, ephemeral: true, allowedMentions: { parse: [] } });
+}
+
+async function handleDisboardMessage(message: Message): Promise<void> {
+  const bump = trackedBumpFromMessage(message);
+  if (!bump) {
+    return;
+  }
+
+  const result = await recordBump(bump);
+  if (result.recorded) {
+    console.log(
+      `DISBOARD bump tracked: guild=${bump.guildId} user=${bump.userId} userCount=${result.userCount} total=${result.total}`
+    );
+  }
+}
+
 async function handleCommand(
   interaction: ChatInputCommandInteraction,
   automation: ServerTagAutomation
@@ -177,6 +268,12 @@ async function handleCommand(
         return;
       case "업데이트":
         await handleUpdateCommand(interaction, automation);
+        return;
+      case "범프통계":
+        await handleBumpStatsCommand(interaction);
+        return;
+      case "범프초기화":
+        await handleBumpResetCommand(interaction);
         return;
       default:
         await interaction.reply({ content: "알 수 없는 DOUM 명령입니다.", ephemeral: true });
@@ -197,7 +294,7 @@ async function main(): Promise<void> {
   requireDiscordBotConfig();
 
   const client = new Client({
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildMessages]
   });
   const serverTagAutomation = new ServerTagAutomation(client);
   serverTagAutomation.register();
@@ -205,7 +302,13 @@ async function main(): Promise<void> {
 
   client.once(Events.ClientReady, (readyClient) => {
     console.log(`Ready! Logged in as ${readyClient.user.tag}`);
-    console.log("DOUM slash command mode enabled. MessageContent intent is not requested.");
+    console.log("DOUM slash command mode and DISBOARD bump tracking enabled. MessageContent intent is not requested.");
+  });
+
+  client.on(Events.MessageCreate, (message) => {
+    void handleDisboardMessage(message).catch((error) => {
+      console.error("DISBOARD bump tracking failed.", error);
+    });
   });
 
   client.on(Events.InteractionCreate, async (interaction) => {
