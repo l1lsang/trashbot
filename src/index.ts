@@ -184,6 +184,7 @@ async function handleBumpStatsCommand(interaction: ChatInputCommandInteraction):
     return;
   }
 
+  await interaction.deferReply();
   const state = await loadState();
   const stats = getGuildSettings(state, guildId).bumpStats;
   const target = interaction.options.getUser("사용자");
@@ -193,7 +194,7 @@ async function handleBumpStatsCommand(interaction: ChatInputCommandInteraction):
     const content = userStats
       ? [`<@${target.id}>님의 범프 통계`, `사용 횟수: **${userStats.count.toLocaleString("ko-KR")}회**`, `최근 사용: ${discordTimestamp(userStats.lastBumpAt)}`].join("\n")
       : `<@${target.id}>님의 기록된 범프 사용 내역이 없습니다.`;
-    await interaction.reply({ content, allowedMentions: { parse: [] } });
+    await interaction.editReply({ content, allowedMentions: { parse: [] } });
     return;
   }
 
@@ -201,7 +202,7 @@ async function handleBumpStatsCommand(interaction: ChatInputCommandInteraction):
     (left, right) => right.count - left.count || Date.parse(right.lastBumpAt) - Date.parse(left.lastBumpAt)
   );
   if (ranking.length === 0) {
-    await interaction.reply("아직 기록된 범프 사용 내역이 없습니다.");
+    await interaction.editReply("아직 기록된 범프 사용 내역이 없습니다.");
     return;
   }
 
@@ -220,7 +221,7 @@ async function handleBumpStatsCommand(interaction: ChatInputCommandInteraction):
     lines.push(``, `외 ${hiddenCount.toLocaleString("ko-KR")}명`);
   }
 
-  await interaction.reply({ content: limitDiscordMessage(lines.join("\n")), allowedMentions: { parse: [] } });
+  await interaction.editReply({ content: limitDiscordMessage(lines.join("\n")), allowedMentions: { parse: [] } });
 }
 
 async function handleBumpResetCommand(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -230,8 +231,9 @@ async function handleBumpResetCommand(interaction: ChatInputCommandInteraction):
     return;
   }
 
+  await interaction.deferReply({ ephemeral: true });
   if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
-    await interaction.reply({ content: "`/범프초기화`는 서버 관리 권한이 있는 사용자만 사용할 수 있습니다.", ephemeral: true });
+    await interaction.editReply("`/범프초기화`는 서버 관리 권한이 있는 사용자만 사용할 수 있습니다.");
     return;
   }
 
@@ -240,7 +242,50 @@ async function handleBumpResetCommand(interaction: ChatInputCommandInteraction):
   const content = target
     ? `<@${target.id}>님의 범프 기록 ${removed.toLocaleString("ko-KR")}회를 초기화했습니다.`
     : `이 서버의 범프 기록 ${removed.toLocaleString("ko-KR")}회를 모두 초기화했습니다.`;
-  await interaction.reply({ content, ephemeral: true, allowedMentions: { parse: [] } });
+  await interaction.editReply({ content, allowedMentions: { parse: [] } });
+}
+
+function discordErrorCode(error: unknown): string | number | undefined {
+  if (!error || typeof error !== "object" || !("code" in error)) {
+    return undefined;
+  }
+
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" || typeof code === "number" ? code : undefined;
+}
+
+function isExpiredOrAcknowledgedInteraction(error: unknown): boolean {
+  const code = discordErrorCode(error);
+  return code === 10062 || code === 40060 || code === "InteractionAlreadyReplied";
+}
+
+async function reportCommandError(interaction: ChatInputCommandInteraction, error: unknown): Promise<void> {
+  if (isExpiredOrAcknowledgedInteraction(error)) {
+    console.warn(
+      `Discord interaction expired or was already acknowledged: command=${interaction.commandName} interaction=${interaction.id} code=${discordErrorCode(error)}`
+    );
+    return;
+  }
+
+  const message = error instanceof Error ? error.message : "알 수 없는 오류가 발생했습니다.";
+  const content = `DOUM 처리 중 문제가 생겼습니다: ${message}`;
+
+  try {
+    if (interaction.deferred || interaction.replied) {
+      await interaction.editReply(limitDiscordMessage(content));
+    } else {
+      await interaction.reply({ content: limitDiscordMessage(content), ephemeral: true });
+    }
+  } catch (responseError) {
+    if (isExpiredOrAcknowledgedInteraction(responseError)) {
+      console.warn(
+        `Could not report command error because the interaction expired: command=${interaction.commandName} interaction=${interaction.id} code=${discordErrorCode(responseError)}`
+      );
+      return;
+    }
+
+    console.error("Failed to report Discord command error.", responseError);
+  }
 }
 
 async function handleDisboardMessage(message: Message): Promise<void> {
@@ -279,14 +324,8 @@ async function handleCommand(
         await interaction.reply({ content: "알 수 없는 DOUM 명령입니다.", ephemeral: true });
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : "알 수 없는 오류가 발생했습니다.";
-    const content = `DOUM 처리 중 문제가 생겼습니다: ${message}`;
-
-    if (interaction.deferred || interaction.replied) {
-      await interaction.editReply(limitDiscordMessage(content));
-    } else {
-      await interaction.reply({ content: limitDiscordMessage(content), ephemeral: true });
-    }
+    console.error(`DOUM command failed: command=${interaction.commandName} interaction=${interaction.id}`, error);
+    await reportCommandError(interaction, error);
   }
 }
 
